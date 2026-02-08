@@ -12,6 +12,16 @@ export class SoundEngine {
     this.preloadStarted = false;
     this.baseGain = 0.42;
     this.duck = 0;
+    this.lastVariant = new Map();
+  }
+
+  pickVariant(family, count) {
+    if (count <= 1) return 1;
+    const prev = this.lastVariant.get(family) || 0;
+    let next = 1 + Math.floor(Math.random() * count);
+    if (next === prev) next = 1 + (next % count);
+    this.lastVariant.set(family, next);
+    return next;
   }
 
   async unlock() {
@@ -52,7 +62,29 @@ export class SoundEngine {
     // Paths are relative to index.html (this repo loads assets from ./public/...).
     return {
       tap: { url: "./public/assets/sfx/tap.mp3", gain: 0.7, rateJitter: 0.03 },
-      cluck: { url: "./public/assets/sfx/cluck.mp3", gain: 0.85, rateJitter: 0.05 },
+      // Chicken vocalizations: keep the always-on cluck soft, and rotate variants to avoid repetition.
+      cluckSoft1: { url: "./public/assets/sfx/chicken/cluck_soft_01.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft2: { url: "./public/assets/sfx/chicken/cluck_soft_02.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft3: { url: "./public/assets/sfx/chicken/cluck_soft_03.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft4: { url: "./public/assets/sfx/chicken/cluck_soft_04.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft5: { url: "./public/assets/sfx/chicken/cluck_soft_05.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft6: { url: "./public/assets/sfx/chicken/cluck_soft_06.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft7: { url: "./public/assets/sfx/chicken/cluck_soft_07.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft8: { url: "./public/assets/sfx/chicken/cluck_soft_08.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft9: { url: "./public/assets/sfx/chicken/cluck_soft_09.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft10: { url: "./public/assets/sfx/chicken/cluck_soft_10.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft11: { url: "./public/assets/sfx/chicken/cluck_soft_11.mp3", gain: 0.62, rateJitter: 0.03 },
+      cluckSoft12: { url: "./public/assets/sfx/chicken/cluck_soft_12.mp3", gain: 0.62, rateJitter: 0.03 },
+      squawk1: { url: "./public/assets/sfx/chicken/squawk_01.mp3", gain: 0.88, rateJitter: 0.02 },
+      squawk2: { url: "./public/assets/sfx/chicken/squawk_02.mp3", gain: 0.88, rateJitter: 0.02 },
+      squawk3: { url: "./public/assets/sfx/chicken/squawk_03.mp3", gain: 0.88, rateJitter: 0.02 },
+      eggSong1: { url: "./public/assets/sfx/chicken/egg_song_01.mp3", gain: 0.92, rateJitter: 0.02 },
+      eggSong2: { url: "./public/assets/sfx/chicken/egg_song_02.mp3", gain: 0.92, rateJitter: 0.02 },
+      purr1: { url: "./public/assets/sfx/chicken/purr_01.mp3", gain: 0.52, rateJitter: 0.02 },
+      purr2: { url: "./public/assets/sfx/chicken/purr_02.mp3", gain: 0.52, rateJitter: 0.02 },
+      wingFlap1: { url: "./public/assets/sfx/chicken/wing_flap_01.mp3", gain: 0.58, rateJitter: 0.02 },
+      wingFlap2: { url: "./public/assets/sfx/chicken/wing_flap_02.mp3", gain: 0.58, rateJitter: 0.02 },
+      peckScratch1: { url: "./public/assets/sfx/chicken/peck_scratch_01.mp3", gain: 0.48, rateJitter: 0.02 },
       sparkle: { url: "./public/assets/sfx/sparkle.mp3", gain: 0.75, rateJitter: 0.04 },
       boing: { url: "./public/assets/sfx/boing.mp3", gain: 0.9, rateJitter: 0.04 },
       bubblePop: { url: "./public/assets/sfx/bubble_pop.mp3", gain: 0.65, rateJitter: 0.05 },
@@ -433,11 +465,43 @@ export class SoundEngine {
     this.playTone({ freq: 640, duration: 0.07, gain: 0.05, type: "triangle", freqEnd: 820 });
   }
 
-  cluck() {
-    if (this.playSample("cluck")) return;
+  cluck({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("cluckSoft", 12);
+    if (this.playSample(`cluckSoft${i}`, { gain, rate })) return;
     this.playTone({ freq: 520, type: "square", duration: 0.09, gain: 0.05, freqEnd: 640 });
     this.playTone({ freq: 460, type: "square", duration: 0.1, gain: 0.048, startAt: 0.08, freqEnd: 380 });
     this.playNoise({ duration: 0.06, gain: 0.025, lowpass: 4200, highpass: 800, playbackRate: 1.5 });
+  }
+
+  squawk({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("squawk", 3);
+    if (this.playSample(`squawk${i}`, { gain, rate })) return;
+    // Fallback: slightly harsher than cluck.
+    this.playTone({ freq: 620, type: "square", duration: 0.08, gain: 0.06, freqEnd: 520 });
+    this.playNoise({ duration: 0.09, gain: 0.04, lowpass: 5200, highpass: 900, playbackRate: 1.2 });
+  }
+
+  eggSong({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("eggSong", 2);
+    if (this.playSample(`eggSong${i}`, { gain, rate })) return;
+    this.squawk({ gain: 0.9 * gain, rate });
+  }
+
+  purr({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("purr", 2);
+    if (this.playSample(`purr${i}`, { gain, rate })) return;
+    this.playTone({ freq: 260, type: "sine", duration: 0.25, gain: 0.03 * gain, freqEnd: 220 });
+  }
+
+  wingFlap({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("wingFlap", 2);
+    if (this.playSample(`wingFlap${i}`, { gain, rate })) return;
+    this.playNoise({ duration: 0.12, gain: 0.045 * gain, lowpass: 4200, highpass: 240, playbackRate: 0.9 * rate });
+  }
+
+  peckScratch({ gain = 1, rate = 1 } = {}) {
+    if (this.playSample("peckScratch1", { gain, rate })) return;
+    this.tap();
   }
 
   fireworkBurst() {

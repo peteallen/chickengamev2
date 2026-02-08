@@ -646,7 +646,7 @@ class PottyDropAction extends GameAction {
       game.sound.sparkle();
     }
     if (next === "strain") {
-      game.sound.cluck();
+      game.sound.squawk();
     }
     if (next === "hop") {
       game.sound.boing();
@@ -1136,7 +1136,7 @@ class EggHatchAction extends GameAction {
     this.stateTime = 0;
 
     if (next === "squat") {
-      game.sound.cluck();
+      game.sound.squawk();
     }
     if (next === "lay") {
       this.eggAttached = true;
@@ -1146,6 +1146,7 @@ class EggHatchAction extends GameAction {
     if (next === "drop") {
       this.eggAttached = false;
       this.eggVY = 28;
+      game.sound.eggSong();
     }
     if (next === "wobble") {
       this.eggAttached = false;

@@ -106,7 +106,10 @@ export class Chicken {
 
     this.cluckTimer -= dt;
     if (this.cluckTimer <= 0) {
-      game.sound.cluck();
+      const r = Math.random();
+      if (r < 0.7) game.sound.cluck();
+      else if (r < 0.86) game.sound.purr();
+      else game.sound.peckScratch();
       this.cluckTimer = randRange(1.9, 4.9);
     }
 

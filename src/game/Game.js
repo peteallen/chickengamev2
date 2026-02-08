@@ -450,24 +450,26 @@ export class Game {
 	    const barnX = 1310;
 	    // Use the lowest (max Y) point under the barn footprint so it doesn't "float" on sloped terrain.
 	    let barnBaseY = -Infinity;
-	    for (let x = barnX; x <= barnX + barnW; x += 8) {
-	      barnBaseY = Math.max(barnBaseY, this.terrainBackYAt(x));
-	    }
-	    barnBaseY += 3;
+		    for (let x = barnX; x <= barnX + barnW; x += 8) {
+		      barnBaseY = Math.max(barnBaseY, this.terrainBackYAt(x));
+		    }
+		    barnBaseY += 1;
 
-	    // The barn sprite includes a little extra visual "fringe" below the painted base.
-	    // Anchor the painted base to the terrain so it doesn't read as hovering.
-	    const barnBasePadY = 8;
-	    const barnY = barnBaseY - barnH + barnBasePadY;
+		    // The barn sprite includes a little extra visual "fringe" below the painted base.
+		    // Anchor the painted base to the terrain so it doesn't read as hovering.
+		    const barnBasePadY = 12;
+		    const barnY = barnBaseY - barnH + barnBasePadY;
 
-	    ctx.fillStyle = "rgba(70, 88, 56, 0.14)";
-	    ctx.beginPath();
-	    ctx.ellipse(coopX + coopW * 0.5, coopBaseY, 78, 13, 0, 0, Math.PI * 2);
-	    ctx.fill();
-	    ctx.beginPath();
-	    // Contact shadow: keep it tight to the barn base so it doesn't read as hovering.
-	    ctx.ellipse(barnX + barnW * 0.5, barnBaseY + 1, 86, 9, 0, 0, Math.PI * 2);
-	    ctx.fill();
+		    ctx.fillStyle = "rgba(70, 88, 56, 0.14)";
+		    ctx.beginPath();
+		    ctx.ellipse(coopX + coopW * 0.5, coopBaseY, 78, 13, 0, 0, Math.PI * 2);
+		    ctx.fill();
+		    ctx.beginPath();
+		    // Contact shadow: keep it tight to the barn base so it doesn't read as hovering.
+		    // Tie the shadow to the sprite's visual base (not the terrain sample point) to avoid a visible gap on slopes.
+		    const barnShadowY = barnY + barnH - 14;
+		    ctx.ellipse(barnX + barnW * 0.5, barnShadowY, 84, 8, 0, 0, Math.PI * 2);
+		    ctx.fill();
 
     ctx.drawImage(coop, coopX, coopY, coopW, coopH);
     ctx.drawImage(barn, barnX, barnY, barnW, barnH);
