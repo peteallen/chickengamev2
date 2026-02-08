@@ -445,19 +445,29 @@ export class Game {
     const coopBaseY = this.terrainBackYAt(coopX + coopW * 0.5) + 2;
     const coopY = coopBaseY - coopH;
 
-    const barnW = 226;
-    const barnH = 210;
-    const barnX = 1310;
-    const barnBaseY = this.terrainBackYAt(barnX + barnW * 0.5) + 3;
-    const barnY = barnBaseY - barnH;
+	    const barnW = 226;
+	    const barnH = 210;
+	    const barnX = 1310;
+	    // Use the lowest (max Y) point under the barn footprint so it doesn't "float" on sloped terrain.
+	    let barnBaseY = -Infinity;
+	    for (let x = barnX; x <= barnX + barnW; x += 8) {
+	      barnBaseY = Math.max(barnBaseY, this.terrainBackYAt(x));
+	    }
+	    barnBaseY += 3;
 
-    ctx.fillStyle = "rgba(70, 88, 56, 0.14)";
-    ctx.beginPath();
-    ctx.ellipse(coopX + coopW * 0.5, coopBaseY, 78, 13, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(barnX + barnW * 0.5, barnBaseY + 1, 94, 16, 0, 0, Math.PI * 2);
-    ctx.fill();
+	    // The barn sprite includes a little extra visual "fringe" below the painted base.
+	    // Anchor the painted base to the terrain so it doesn't read as hovering.
+	    const barnBasePadY = 8;
+	    const barnY = barnBaseY - barnH + barnBasePadY;
+
+	    ctx.fillStyle = "rgba(70, 88, 56, 0.14)";
+	    ctx.beginPath();
+	    ctx.ellipse(coopX + coopW * 0.5, coopBaseY, 78, 13, 0, 0, Math.PI * 2);
+	    ctx.fill();
+	    ctx.beginPath();
+	    // Contact shadow: keep it tight to the barn base so it doesn't read as hovering.
+	    ctx.ellipse(barnX + barnW * 0.5, barnBaseY + 1, 86, 9, 0, 0, Math.PI * 2);
+	    ctx.fill();
 
     ctx.drawImage(coop, coopX, coopY, coopW, coopH);
     ctx.drawImage(barn, barnX, barnY, barnW, barnH);

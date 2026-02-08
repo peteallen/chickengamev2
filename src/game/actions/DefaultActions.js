@@ -48,19 +48,21 @@ const drawSprite = (ctx, sprite, x, y, width, height, { flipX = false, rotation 
 };
 
 const updateParticles = (particles, dt, gravity = 0) => {
-  for (const particle of particles) {
+  // In-place update + compaction (avoids O(n^2) splice cost when arrays get large).
+  let write = 0;
+  for (let i = 0; i < particles.length; i += 1) {
+    const particle = particles[i];
     particle.vx *= 0.995;
     particle.vy += gravity * dt;
     particle.x += particle.vx * dt;
     particle.y += particle.vy * dt;
     particle.life -= dt;
-  }
-
-  for (let i = particles.length - 1; i >= 0; i -= 1) {
-    if (particles[i].life <= 0) {
-      particles.splice(i, 1);
+    if (particle.life > 0) {
+      particles[write] = particle;
+      write += 1;
     }
   }
+  particles.length = write;
 };
 
 class FireworksAction extends GameAction {
@@ -75,9 +77,32 @@ class FireworksAction extends GameAction {
     this.focusY = 240;
     this.lastBurstX = this.focusX;
     this.lastBurstY = this.focusY;
+
+    this.quality = 1;
+    this.sizeBoost = 1;
+    this.maxSparks = 700;
+    this.maxStars = 220;
+    this.maxRockets = 3;
+    this.maxFlashes = 6;
+
+    this.skyGradient = null;
+    this.skyGradientH = 0;
   }
 
   start(game) {
+    const dpr = game.view?.dpr || 1;
+    const pxW = game.view?.width || game.world.width;
+    const pxH = game.view?.height || game.world.height;
+    const pixels = pxW * pxH * dpr * dpr;
+    const baseline = game.world.width * game.world.height;
+
+    this.quality = clamp(Math.sqrt(baseline / Math.max(baseline, pixels)), 0.45, 1);
+    this.sizeBoost = clamp(1 / Math.sqrt(this.quality), 1, 1.25);
+    this.maxSparks = Math.round(700 * this.quality);
+    this.maxStars = Math.round(220 * this.quality);
+    this.maxRockets = Math.max(1, Math.round(3 * this.quality));
+    this.maxFlashes = Math.max(2, Math.round(6 * this.quality));
+
     this.launchRocket(game);
   }
 
@@ -88,6 +113,8 @@ class FireworksAction extends GameAction {
   }
 
   launchRocket(game) {
+    if (this.rockets.length >= this.maxRockets) return;
+
     const x = randRange(220, game.world.width - 220);
     const groundY = game.terrainYAt(x);
     const startY = clamp(groundY + 8, game.world.height * 0.56, game.world.height - 8);
@@ -98,6 +125,7 @@ class FireworksAction extends GameAction {
     const vy = (targetY - startY - 0.5 * g * flightT * flightT) / flightT;
 
     const hue = randInt(0, 359);
+    const core = `hsla(${hue}, 100%, 82%, 1)`;
     this.rockets.push({
       x,
       y: startY,
@@ -106,6 +134,7 @@ class FireworksAction extends GameAction {
       life: flightT + 0.4,
       fuse: flightT,
       hue,
+      core,
       sparkTimer: 0,
     });
     this.focusX = x;
@@ -122,33 +151,45 @@ class FireworksAction extends GameAction {
     this.focusX = x;
     this.focusY = y;
 
-    this.flashes.push({
-      x,
-      y,
-      life: 0.22,
-      size: randRange(26, 44),
-    });
+    if (this.flashes.length < this.maxFlashes) {
+      this.flashes.push({
+        x,
+        y,
+        life: 0.22,
+        size: randRange(26, 44),
+      });
+    }
 
-    const count = randInt(72, 98);
+    const baseCount = randInt(56, 78);
+    let count = Math.max(28, Math.round(baseCount * this.quality));
+    const availableStars = this.maxStars - this.stars.length;
+    if (availableStars <= 0) {
+      count = 0;
+    } else {
+      count = Math.min(count, availableStars);
+    }
     for (let i = 0; i < count; i += 1) {
       const angle = randRange(0, Math.PI * 2);
       const spread = Math.pow(Math.random(), 0.55);
       const speed = (170 + spread * 430) * randRange(0.9, 1.08);
       const hue = (baseHue + randRange(-28, 28) + (Math.random() < 0.22 ? 180 : 0) + 360) % 360;
+      const color = `hsla(${hue}, 100%, 70%, 1)`;
       this.stars.push({
         x,
         y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: randRange(1.0, 1.75),
-        size: randRange(1.6, 3.2),
+        size: randRange(1.6, 3.2) * this.sizeBoost,
         hue,
-        sparkleTimer: randRange(0, 0.08),
+        color,
+        sparkleTimer: randRange(0, 0.12) / this.quality,
       });
     }
 
     // Warm, quick glitter at the burst origin for a more "real" pop.
     for (let i = 0; i < 24; i += 1) {
+      if (this.sparks.length >= this.maxSparks) break;
       const angle = randRange(0, Math.PI * 2);
       const speed = randRange(40, 210);
       this.sparks.push({
@@ -157,7 +198,7 @@ class FireworksAction extends GameAction {
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: randRange(0.18, 0.42),
-        size: randRange(1.2, 2.6),
+        size: randRange(1.2, 2.6) * this.sizeBoost,
         color: `hsla(${baseHue}, 100%, 86%, 1)`,
       });
     }
@@ -170,8 +211,13 @@ class FireworksAction extends GameAction {
 
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.elapsed < this.duration - 1.25) {
-      this.spawnTimer = randRange(0.55, 0.9);
-      this.launchRocket(game);
+      if (this.rockets.length < this.maxRockets) {
+        this.spawnTimer = randRange(0.55, 0.9);
+        this.launchRocket(game);
+      } else {
+        // Recheck soon without spamming new rockets.
+        this.spawnTimer = 0.08;
+      }
     }
 
     const rocketGravity = 520;
@@ -187,16 +233,18 @@ class FireworksAction extends GameAction {
 
       rocket.sparkTimer -= dt;
       if (rocket.sparkTimer <= 0) {
-        rocket.sparkTimer = randRange(0.012, 0.03);
-        this.sparks.push({
-          x: rocket.x + randRange(-1.6, 1.6),
-          y: rocket.y + randRange(-1.6, 1.6),
-          vx: randRange(-40, 40),
-          vy: randRange(80, 220),
-          life: randRange(0.12, 0.28),
-          size: randRange(1.1, 2.2),
-          color: "rgba(255, 243, 210, 1)",
-        });
+        rocket.sparkTimer = randRange(0.02, 0.06) / this.quality;
+        if (this.sparks.length < this.maxSparks) {
+          this.sparks.push({
+            x: rocket.x + randRange(-1.6, 1.6),
+            y: rocket.y + randRange(-1.6, 1.6),
+            vx: randRange(-40, 40),
+            vy: randRange(80, 220),
+            life: randRange(0.12, 0.28),
+            size: randRange(1.1, 2.2) * this.sizeBoost,
+            color: "rgba(255, 243, 210, 1)",
+          });
+        }
       }
     }
 
@@ -221,35 +269,46 @@ class FireworksAction extends GameAction {
       // Emit a tiny sparkle trail so the burst reads as "stars" instead of confetti dots.
       star.sparkleTimer -= dt;
       if (star.sparkleTimer <= 0 && star.life > 0.15) {
-        star.sparkleTimer = randRange(0.03, 0.085);
-        this.sparks.push({
-          x: star.x + randRange(-1, 1),
-          y: star.y + randRange(-1, 1),
-          vx: star.vx * 0.12 + randRange(-40, 40),
-          vy: star.vy * 0.12 + randRange(-10, 60),
-          life: randRange(0.12, 0.32),
-          size: randRange(1.0, 2.0),
-          color: `hsla(${star.hue}, 100%, 82%, 1)`,
-        });
+        star.sparkleTimer = randRange(0.06, 0.16) / this.quality;
+        if (this.sparks.length < this.maxSparks) {
+          this.sparks.push({
+            x: star.x + randRange(-1, 1),
+            y: star.y + randRange(-1, 1),
+            vx: star.vx * 0.12 + randRange(-40, 40),
+            vy: star.vy * 0.12 + randRange(-10, 60),
+            life: randRange(0.12, 0.32),
+            size: randRange(1.0, 2.0) * this.sizeBoost,
+            color: `hsla(${star.hue}, 100%, 82%, 1)`,
+          });
+        }
       }
     }
 
-    for (let i = this.stars.length - 1; i >= 0; i -= 1) {
-      if (this.stars[i].life <= 0) this.stars.splice(i, 1);
+    let starWrite = 0;
+    for (let i = 0; i < this.stars.length; i += 1) {
+      const star = this.stars[i];
+      if (star.life > 0) {
+        this.stars[starWrite] = star;
+        starWrite += 1;
+      }
     }
+    this.stars.length = starWrite;
 
     updateParticles(this.sparks, dt, 260);
-    for (let i = this.sparks.length - 1; i >= 0; i -= 1) {
-      if (this.sparks[i].life <= 0) this.sparks.splice(i, 1);
-    }
 
     for (const flash of this.flashes) {
       flash.life -= dt;
       flash.size += dt * 220;
     }
-    for (let i = this.flashes.length - 1; i >= 0; i -= 1) {
-      if (this.flashes[i].life <= 0) this.flashes.splice(i, 1);
+    let flashWrite = 0;
+    for (let i = 0; i < this.flashes.length; i += 1) {
+      const flash = this.flashes[i];
+      if (flash.life > 0) {
+        this.flashes[flashWrite] = flash;
+        flashWrite += 1;
+      }
     }
+    this.flashes.length = flashWrite;
 
     if (this.elapsed >= this.duration && this.rockets.length === 0 && this.stars.length === 0 && this.sparks.length === 0) {
       this.finish(game);
@@ -268,12 +327,19 @@ class FireworksAction extends GameAction {
     // Make the sky go properly dark before drawing bright fireworks.
     if (t > 0.01) {
       const skyH = game.world.height * 0.66;
-      const g = ctx.createLinearGradient(0, 0, 0, skyH);
-      g.addColorStop(0, `rgba(1, 2, 8, ${0.88 * t})`);
-      g.addColorStop(0.55, `rgba(3, 8, 24, ${0.74 * t})`);
-      g.addColorStop(1, `rgba(0, 0, 0, ${0.34 * t})`);
-      ctx.fillStyle = g;
+      if (!this.skyGradient || this.skyGradientH !== skyH) {
+        this.skyGradient = ctx.createLinearGradient(0, 0, 0, skyH);
+        this.skyGradient.addColorStop(0, "rgba(1, 2, 8, 0.88)");
+        this.skyGradient.addColorStop(0.55, "rgba(3, 8, 24, 0.74)");
+        this.skyGradient.addColorStop(1, "rgba(0, 0, 0, 0.34)");
+        this.skyGradientH = skyH;
+      }
+
+      ctx.save();
+      ctx.globalAlpha = t;
+      ctx.fillStyle = this.skyGradient;
       ctx.fillRect(0, 0, game.world.width, skyH);
+      ctx.restore();
     }
 
     ctx.save();
@@ -283,47 +349,45 @@ class FireworksAction extends GameAction {
     // Burst flash.
     ctx.fillStyle = "rgba(255, 255, 235, 1)";
     ctx.shadowColor = "rgba(255, 255, 235, 1)";
+    ctx.shadowBlur = 28;
     for (const flash of this.flashes) {
       const a = clamp(flash.life / 0.22, 0, 1);
       ctx.globalAlpha = 0.85 * a;
-      ctx.shadowBlur = 34;
       ctx.beginPath();
       ctx.arc(flash.x, flash.y, flash.size, 0, Math.PI * 2);
       ctx.fill();
     }
 
     // Stars (colored).
+    ctx.shadowBlur = 18;
     for (const star of this.stars) {
       const a = clamp(star.life / 1.1, 0, 1);
       ctx.globalAlpha = a;
-      const color = `hsla(${star.hue}, 100%, 70%, 1)`;
-      ctx.fillStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 22;
+      ctx.fillStyle = star.color;
+      ctx.shadowColor = star.color;
       ctx.beginPath();
       ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
       ctx.fill();
     }
 
     // Sparks (rocket glitter + twinkle).
+    ctx.shadowBlur = 12;
     for (const spark of this.sparks) {
       const a = clamp(spark.life * 3.2, 0, 1);
+      if (a <= 0.001) continue;
       ctx.globalAlpha = a;
       ctx.fillStyle = spark.color;
       ctx.shadowColor = spark.color;
-      ctx.shadowBlur = 16;
-      ctx.beginPath();
-      ctx.arc(spark.x, spark.y, spark.size, 0, Math.PI * 2);
-      ctx.fill();
+      const r = spark.size;
+      ctx.fillRect(spark.x - r, spark.y - r, r * 2, r * 2);
     }
 
     // Rocket heads (sparkling balls) last so they read cleanly on top of their trails.
     for (const rocket of this.rockets) {
       ctx.globalAlpha = 1;
       ctx.shadowBlur = 26;
-      const core = `hsla(${rocket.hue}, 100%, 82%, 1)`;
-      ctx.fillStyle = core;
-      ctx.shadowColor = core;
+      ctx.fillStyle = rocket.core;
+      ctx.shadowColor = rocket.core;
       ctx.beginPath();
       ctx.arc(rocket.x, rocket.y, 4.6, 0, Math.PI * 2);
       ctx.fill();
