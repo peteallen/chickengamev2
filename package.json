@@ -1,0 +1,18 @@
+{
+  "name": "v4",
+  "version": "1.0.0",
+  "description": "A tablet-friendly, no-text toddler game built with HTML5 Canvas and modular JavaScript architecture.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "check:actions": "node scripts/action_sweep.mjs",
+    "build:hero-assets": ".venv/bin/python scripts/build_locked_hero_assets.py"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright-core": "^1.58.2"
+  }
+}

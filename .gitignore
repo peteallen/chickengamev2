@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Local builds / outputs
+output/
+
+# Scratch / runtime capture
+tmp/
+tmp-*.png
+
+# Python venv
+.venv/
+
+# OS/editor
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
