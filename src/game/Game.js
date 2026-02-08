@@ -21,6 +21,7 @@ const ASSET_MANIFEST = {
   jetpackSkyColumn: "./public/assets/sprites/locked/jetpack-sky-column.png?v=locked1",
   parachute: "./public/assets/sprites/locked/parachute.png?v=locked1",
   discoBall: "./public/assets/sprites/locked/disco-ball.png?v=locked3",
+  coop: "./public/assets/sprites/locked/coop.png?v=locked1",
   tractor: "./public/assets/sprites/locked/tractor.png?v=locked3",
   hay: "./public/assets/sprites/locked/hay.png?v=locked3",
   butterfly: "./public/assets/sprites/locked/butterfly.png?v=locked3",
