@@ -122,6 +122,8 @@ export class SoundEngine {
       rainLoop: { url: "./public/assets/sfx/rain_loop.mp3", gain: 0.32 },
       // Cache-bust so the newest loop is picked up even with force-cache.
       discoLoop: { url: "./public/assets/sfx/disco_loop.mp3?v=slap1", gain: 0.45 },
+      peekabooChorus1: { url: "./public/assets/sfx/peekaboo_chorus_01.mp3", gain: 0.75, rateJitter: 0.02 },
+      peekabooChorus2: { url: "./public/assets/sfx/peekaboo_chorus_02.mp3", gain: 0.75, rateJitter: 0.02 },
     };
   }
 
@@ -689,5 +691,11 @@ export class SoundEngine {
   sparkle() {
     if (this.playSample("sparkle")) return;
     this.playTone({ freq: 1200, type: "triangle", duration: 0.08, gain: 0.035, freqEnd: 1640 });
+  }
+
+  peekabooChorus({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("peekabooChorus", 2);
+    if (this.playSample(`peekabooChorus${i}`, { gain, rate })) return;
+    this.sparkle();
   }
 }

@@ -23,7 +23,6 @@ python3 -m http.server 4173
 - Potty drop + poop/pee + flush swirl
 - Disco party (dance floor + disco ball + lights)
 - Egg laying + hatching + follower chick
-- Coop peekaboo (hide + window eyes + reveal)
 - Rain cloud + rainbow
 - Butterfly parade
 - Tractor zoom-by

@@ -159,7 +159,17 @@ export class Game {
     this.tapBursts.push({ x, y, life: 0.45, size: 12 + Math.random() * 14 });
 
     const tapInsidePen = this.isInsidePen(x, y);
-    if (this.chicken.containsPoint(x, y) || tapInsidePen) {
+    const tapOnChicken = this.chicken.containsPoint(x, y);
+
+    // Allow active actions to consume taps (for interactive beats like peekaboo).
+    for (let i = this.activeActions.length - 1; i >= 0; i -= 1) {
+      const action = this.activeActions[i];
+      if (typeof action.onTap !== "function") continue;
+      const consumed = action.onTap(this, { x, y, tapInsidePen, tapOnChicken }) === true;
+      if (consumed) return;
+    }
+
+    if (tapOnChicken || tapInsidePen) {
       this.sound.cluck();
       this.triggerRandomAction();
       return;
@@ -189,7 +199,7 @@ export class Game {
     const action = preferredId ? this.registry.createById(preferredId) || this.registry.next() : this.registry.next();
     if (!action) return;
 
-    if (action.id === "potty") {
+    if (action.id === "potty" || action.id === "peekaboo-coop") {
       // Potty is a hero moment: clear scene clutter so it always reads clearly.
       for (let i = this.activeActions.length - 1; i >= 0; i -= 1) {
         const existing = this.activeActions[i];

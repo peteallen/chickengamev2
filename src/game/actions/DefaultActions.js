@@ -1,4 +1,4 @@
-import { clamp, easeOutCubic, randInt, randRange } from "../core/math.js";
+import { clamp, easeOutCubic, lerp, randInt, randRange } from "../core/math.js";
 
 const easeInCubic = (t) => t * t * t;
 const easeInOutCubic = (t) =>
@@ -1528,6 +1528,692 @@ class OuthousePottyAction extends GameAction {
   }
 }
 
+class PeekabooCoopAction extends GameAction {
+  constructor() {
+    // Duration is a safeguard only; the action is tap-gated during interior hiding.
+    super({ id: "peekaboo-coop", duration: 45, major: true });
+
+    this.stage = "exterior"; // "exterior" | "interior"
+    this.fade = 0; // 0..1 black cut overlay
+
+    this.state = "roll-in";
+    this.stateTime = 0;
+
+    this.baseU = 0.5;
+    this.baseV = 0.76;
+    this.prevCluckTimer = 0;
+
+    this.roundIndex = 0;
+    this.rounds = [
+      { kind: "hay", x: 520, y: 760, w: 270, h: 170, stick: "right" },
+      { kind: "barrel", x: 1080, y: 770, w: 210, h: 250, stick: "left" },
+      { kind: "eggs", x: 800, y: 780, w: 190, h: 230, stick: "right" },
+    ];
+
+    this.coop = {
+      u: 0.7,
+      v: 0.64,
+      offsetX: -1400,
+      rotation: 0,
+    };
+
+    this.actor = {
+      x: 800,
+      y: 650,
+      groundY: 650,
+      visualScale: 1,
+      dir: 1,
+      alpha: 1,
+      poseScale: 1,
+    };
+
+    this.sparkles = [];
+    this.confetti = [];
+
+    this.surpriseAlpha = 0; // 0..1, drawn on pop-out
+
+    this.exitDoorOpened = false;
+    this.exitDoorClosed = false;
+  }
+
+  shouldHideChicken() {
+    return true;
+  }
+
+  shouldHideCompanions() {
+    return true;
+  }
+
+  shouldSuppressTapBursts() {
+    return true;
+  }
+
+  start(game) {
+    this.elapsed = 0;
+    this.stage = "exterior";
+    this.fade = 0;
+
+    this.state = "roll-in";
+    this.stateTime = 0;
+
+    this.baseU = game.chicken.u;
+    this.baseV = game.chicken.v;
+
+    this.prevCluckTimer = game.chicken.cluckTimer;
+    game.chicken.cluckTimer = 999;
+
+    // Freeze the real chicken; render a cinematic actor instead.
+    game.chicken.setController("peekaboo-coop", () => true);
+
+    this.actor.x = game.chicken.x;
+    this.actor.groundY = game.chicken.groundY;
+    this.actor.y = this.actor.groundY;
+    this.actor.visualScale = game.chicken.visualScale;
+    this.actor.dir = game.chicken.dir || 1;
+    this.actor.alpha = 1;
+    this.actor.poseScale = 1;
+
+    this.coop.offsetX = -1400;
+    this.coop.rotation = 0;
+
+    this.sparkles = [];
+    this.confetti = [];
+
+    this.roundIndex = 0;
+    this.surpriseAlpha = 0;
+
+    this.exitDoorOpened = false;
+    this.exitDoorClosed = false;
+  }
+
+  setState(next, game) {
+    this.state = next;
+    this.stateTime = 0;
+  }
+
+  onTap(game, _tap) {
+    // Peekaboo is an interactive mini-scene: taps should advance it, not start new actions.
+    if (this.state === "hide-wait") {
+      this.setState("pop-out", game);
+      return true;
+    }
+    return true;
+  }
+
+  coopMetrics(game) {
+    const sprite = game.assets.get("coop");
+    const p = game.penSpace.toScreen(this.coop.u, this.coop.v);
+    const s = game.penSpace.depthScale(this.coop.v);
+    const spriteW = sprite?.width || 760;
+    const spriteH = sprite?.height || 620;
+    const aspect = spriteW / Math.max(1, spriteH);
+    const h = 290 * s;
+    const w = h * aspect;
+    const x = p.x + this.coop.offsetX;
+    const y = p.y;
+    return { sprite, x, y, w, h, s };
+  }
+
+  spawnSparklesAt(x, y, count, scale = 1) {
+    for (let i = 0; i < count; i += 1) {
+      this.sparkles.push({
+        x: x + randRange(-22, 22) * scale,
+        y: y + randRange(-18, 18) * scale,
+        vx: randRange(-120, 120),
+        vy: randRange(-160, -40),
+        life: randRange(0.45, 0.85),
+        size: randRange(5, 14) * scale,
+        hue: randInt(28, 62),
+      });
+    }
+    if (this.sparkles.length > 180) this.sparkles.splice(0, this.sparkles.length - 180);
+  }
+
+  spawnConfettiAt(x, y, count) {
+    for (let i = 0; i < count; i += 1) {
+      this.confetti.push({
+        x: x + randRange(-170, 170),
+        y: y + randRange(-8, 14),
+        vx: randRange(-190, 190),
+        vy: randRange(-260, -120),
+        life: randRange(1.2, 2.2),
+        angle: randRange(0, Math.PI * 2),
+        spin: randRange(-8, 8),
+        color: ["#ffd84d", "#ff8ad5", "#6df1ff", "#95ff7f", "#ff9e54"][randInt(0, 4)],
+      });
+    }
+  }
+
+  currentRound() {
+    return this.rounds[clamp(this.roundIndex, 0, this.rounds.length - 1)];
+  }
+
+  roundChickenHiddenPose(round) {
+    const s = 1.02;
+    const stickRight = round.stick === "right";
+    return {
+      x: round.x + (stickRight ? round.w * 0.55 : -round.w * 0.55),
+      y: round.y - 16,
+      dir: stickRight ? 1 : -1,
+      scale: s,
+    };
+  }
+
+  roundChickenPopPose(round) {
+    const s = 1.06;
+    const stickRight = round.stick === "right";
+    return {
+      x: round.x + (stickRight ? round.w * 0.85 : -round.w * 0.85),
+      y: round.y - 20,
+      dir: stickRight ? 1 : -1,
+      scale: s,
+    };
+  }
+
+  update(dt, game) {
+    // Do not call super.update(): this action is tap-gated during hiding.
+    this.elapsed += dt;
+    this.stateTime += dt;
+
+    const d = {
+      rollIn: 1.4,
+      approach: 1.1,
+      enter: 0.7,
+      cutIn: 0.35,
+      interiorReveal: 0.35,
+      popOut: 0.85,
+      moveHide: 0.55,
+      celebrate: 0.9,
+      cutOut: 0.35,
+      exitReveal: 0.25,
+      exit: 0.7,
+      rollOut: 1.4,
+    };
+
+    const m = this.coopMetrics(game);
+    this.coop.rotation = Math.sin(this.elapsed * 9.0) * 0.012;
+    this.surpriseAlpha *= 0.92;
+
+    if (this.state === "roll-in") {
+      const t = clamp(this.stateTime / d.rollIn, 0, 1);
+      this.coop.offsetX = lerp(-1400, 0, easeOutCubic(t));
+
+      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.groundY = m.y;
+      this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.2) * 2.2;
+      this.actor.alpha = 1;
+
+      if (this.stateTime >= d.rollIn) this.setState("approach", game);
+    } else if (this.state === "approach") {
+      // Walk to the coop "door" area.
+      const doorX = m.x - m.w * 0.08;
+      const tx = doorX;
+      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.groundY = m.y;
+      this.actor.x += (tx - this.actor.x) * Math.min(1, dt * 5.2);
+      this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 11.0) * 2.2;
+      this.actor.dir = this.actor.x <= tx ? 1 : -1;
+      this.actor.alpha = 1;
+
+      if (this.stateTime >= d.approach) {
+        game.sound.doorCreakOpen();
+        this.setState("enter", game);
+      }
+    } else if (this.state === "enter") {
+      const t = clamp(this.stateTime / d.enter, 0, 1);
+      // Slip behind the coop and fade out as if entering.
+      const hideX = m.x - m.w * 0.02;
+      this.actor.x += (hideX - this.actor.x) * Math.min(1, dt * 7.0);
+      this.actor.groundY = m.y;
+      this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.8) * 2.2;
+      this.actor.alpha = 1 - easeInOutCubic(t);
+      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.dir = 1;
+
+      if (this.stateTime >= d.enter) {
+        game.sound.doorCreakClose();
+        this.setState("cut-in", game);
+      }
+    } else if (this.state === "cut-in") {
+      this.fade = clamp(this.stateTime / d.cutIn, 0, 1);
+      if (this.stateTime >= d.cutIn) {
+        this.stage = "interior";
+        this.fade = 1;
+        this.setState("interior-reveal", game);
+      }
+    } else if (this.state === "interior-reveal") {
+      this.fade = 1 - clamp(this.stateTime / d.interiorReveal, 0, 1);
+      this.actor.alpha = 1;
+      this.actor.visualScale = 1.02;
+      this.actor.poseScale = 1;
+      const round = this.currentRound();
+      const hidden = this.roundChickenHiddenPose(round);
+      this.actor.x = hidden.x;
+      this.actor.y = hidden.y + Math.sin(this.elapsed * 11.2) * 1.8;
+      this.actor.dir = hidden.dir;
+      if (this.stateTime >= d.interiorReveal) {
+        this.fade = 0;
+        this.setState("hide-wait", game);
+      }
+    } else if (this.state === "hide-wait") {
+      // Hold indefinitely until tapped.
+      const round = this.currentRound();
+      const hidden = this.roundChickenHiddenPose(round);
+      this.actor.alpha = 1;
+      this.actor.visualScale = 1.02;
+      this.actor.poseScale = 1;
+      this.actor.dir = hidden.dir;
+      this.actor.x = hidden.x + Math.sin(this.elapsed * 0.9) * 1.8;
+      this.actor.y = hidden.y + Math.sin(this.elapsed * 11.2) * 2.4;
+    } else if (this.state === "pop-out") {
+      const round = this.currentRound();
+      const hidden = this.roundChickenHiddenPose(round);
+      const pop = this.roundChickenPopPose(round);
+      const t = clamp(this.stateTime / 0.28, 0, 1);
+      const tt = easeOutCubic(t);
+      this.actor.alpha = 1;
+      this.actor.visualScale = lerp(hidden.scale, pop.scale, tt);
+      this.actor.poseScale = 1 + Math.sin(this.stateTime * 12) * 0.03;
+      this.actor.dir = pop.dir;
+      this.actor.x = lerp(hidden.x, pop.x, tt);
+      this.actor.y = lerp(hidden.y, pop.y, tt) - Math.sin(tt * Math.PI) * 22;
+
+      if (this.stateTime < dt * 1.2) {
+        game.sound.peekabooChorus({ gain: 0.98 });
+        // Subtle sparkle burst at the pop point.
+        this.spawnSparklesAt(pop.x, pop.y - 70, 12, 1.0);
+        this.surpriseAlpha = 1;
+      }
+
+      // Keep the surprise face up for a beat.
+      this.surpriseAlpha = Math.max(this.surpriseAlpha, 1 - clamp((this.stateTime - 0.55) / 0.25, 0, 1));
+
+      if (this.stateTime >= d.popOut) {
+        if (this.roundIndex >= 2) {
+          game.sound.confettiSprinkle({ gain: 1.0 });
+          this.spawnConfettiAt(800, 420, 46);
+          this.setState("celebrate", game);
+        } else {
+          this.roundIndex += 1;
+          game.sound.starTwinkle({ gain: 0.85 });
+          this.setState("move-hide", game);
+        }
+      }
+    } else if (this.state === "move-hide") {
+      const round = this.currentRound();
+      const hidden = this.roundChickenHiddenPose(round);
+      this.actor.alpha = 1;
+      this.actor.visualScale += (hidden.scale - this.actor.visualScale) * Math.min(1, dt * 6.0);
+      this.actor.poseScale = 1;
+      this.actor.dir = hidden.dir;
+      this.actor.x += (hidden.x - this.actor.x) * Math.min(1, dt * 5.6);
+      this.actor.y += (hidden.y - this.actor.y) * Math.min(1, dt * 5.6);
+      this.actor.y += Math.sin(this.elapsed * 11.6) * 1.4;
+
+      if (this.stateTime >= d.moveHide) this.setState("hide-wait", game);
+    } else if (this.state === "celebrate") {
+      this.actor.poseScale = 1 + Math.sin(this.elapsed * 8.0) * 0.05;
+      this.actor.y += Math.sin(this.elapsed * 12.4) * 0.8;
+      if (this.stateTime >= d.celebrate) this.setState("cut-out", game);
+    } else if (this.state === "cut-out") {
+      this.fade = clamp(this.stateTime / d.cutOut, 0, 1);
+      if (this.stateTime >= d.cutOut) {
+        this.stage = "exterior";
+        this.fade = 1;
+        this.setState("exit-reveal", game);
+      }
+    } else if (this.state === "exit-reveal") {
+      this.fade = 1 - clamp(this.stateTime / d.exitReveal, 0, 1);
+      if (!this.exitDoorOpened && this.stateTime < dt * 1.2) {
+        this.exitDoorOpened = true;
+        game.sound.doorCreakOpen();
+      }
+      // Reappear just behind the coop, then step out.
+      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.alpha = 1;
+      this.actor.dir = 1;
+      this.actor.groundY = m.y;
+      this.actor.x = m.x - m.w * 0.02;
+      this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.8) * 2.0;
+      if (this.stateTime >= d.exitReveal) {
+        this.fade = 0;
+        this.setState("exit", game);
+      }
+    } else if (this.state === "exit") {
+      const t = clamp(this.stateTime / d.exit, 0, 1);
+      const tx = m.x - m.w * 0.22;
+      this.actor.x += (tx - this.actor.x) * Math.min(1, dt * 6.2);
+      this.actor.groundY = m.y;
+      this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.2) * 2.2;
+      this.actor.alpha = 1;
+      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      if (!this.exitDoorClosed && this.stateTime >= d.exit * 0.72) {
+        this.exitDoorClosed = true;
+        game.sound.doorCreakClose();
+      }
+      if (this.stateTime >= d.exit) this.setState("roll-out", game);
+    } else if (this.state === "roll-out") {
+      const t = clamp(this.stateTime / d.rollOut, 0, 1);
+      this.coop.offsetX = lerp(0, 1400, easeInOutCubic(t));
+      this.actor.alpha = 1 - easeInOutCubic(t);
+      if (this.stateTime >= d.rollOut) this.finish(game);
+    }
+
+    for (const sp of this.sparkles) {
+      sp.vx *= 0.992;
+      sp.vy += 240 * dt;
+      sp.x += sp.vx * dt;
+      sp.y += sp.vy * dt;
+      sp.life -= dt;
+    }
+    for (let i = this.sparkles.length - 1; i >= 0; i -= 1) {
+      if (this.sparkles[i].life <= 0) this.sparkles.splice(i, 1);
+    }
+
+    for (const bit of this.confetti) {
+      bit.vy += 340 * dt;
+      bit.x += bit.vx * dt;
+      bit.y += bit.vy * dt;
+      bit.life -= dt;
+      bit.angle += bit.spin * dt;
+    }
+    for (let i = this.confetti.length - 1; i >= 0; i -= 1) {
+      const b = this.confetti[i];
+      if (b.life <= 0 || b.y > game.world.height + 30) this.confetti.splice(i, 1);
+    }
+  }
+
+  drawChickenActor(ctx, sprite, opts = {}) {
+    if ((this.actor.alpha || 0) < 0.08) return;
+    const skipShadow = !!opts.skipShadow;
+    const size = 224 * this.actor.visualScale * this.actor.poseScale;
+    const drawX = this.actor.x;
+    const drawY = this.actor.y - 62 * this.actor.visualScale;
+    const shadowW = 66 * this.actor.visualScale;
+    const shadowH = 17 * this.actor.visualScale;
+
+    ctx.save();
+    ctx.globalAlpha = this.actor.alpha;
+    ctx.translate(drawX, drawY);
+
+    if (!skipShadow) {
+      ctx.fillStyle = "rgba(0,0,0,0.16)";
+      ctx.beginPath();
+      ctx.ellipse(0, 106 * this.actor.visualScale, shadowW, shadowH, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const swing = Math.sin(this.elapsed * (8.8 + this.actor.visualScale * 2.2)) * 0.05;
+    ctx.rotate(swing * this.actor.dir);
+    ctx.scale(this.actor.dir, 1);
+    ctx.drawImage(sprite, -size / 2, -size / 2, size, size);
+
+    if (this.surpriseAlpha > 0.02) {
+      const a = clamp(this.surpriseAlpha, 0, 1);
+      const s = size / 224;
+      // Simple "surprised" face overlay: big eyes + open beak.
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.beginPath();
+      ctx.arc(-22 * s, -34 * s, 11.5 * s, 0, Math.PI * 2);
+      ctx.arc(16 * s, -36 * s, 11.5 * s, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(20,22,28,0.9)";
+      ctx.beginPath();
+      ctx.arc(-21 * s, -33 * s, 4.2 * s, 0, Math.PI * 2);
+      ctx.arc(17 * s, -35 * s, 4.2 * s, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255, 168, 68, 0.92)";
+      ctx.beginPath();
+      ctx.ellipse(-3 * s, -12 * s, 13 * s, 9 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  drawCoop(ctx, game) {
+    const m = this.coopMetrics(game);
+
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(m.x, m.y + 10 * m.s, m.w * 0.42, 10 * m.s, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.translate(m.x, m.y - m.h);
+    ctx.rotate(this.coop.rotation);
+    ctx.drawImage(m.sprite, -m.w / 2, 0, m.w, m.h);
+    ctx.restore();
+  }
+
+  drawCoopInterior(ctx, game) {
+    // Simple painted interior (no sprite dependency): warm wood walls + straw floor.
+    const w = game.world.width;
+    const h = game.world.height;
+
+    const wall = ctx.createLinearGradient(0, 0, 0, h * 0.72);
+    wall.addColorStop(0, "rgba(244, 222, 182, 1)");
+    wall.addColorStop(1, "rgba(214, 180, 126, 1)");
+    ctx.fillStyle = wall;
+    ctx.fillRect(0, 0, w, h);
+
+    // Planks
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    for (let y = 40; y < h * 0.72; y += 34) {
+      const shade = 1 + Math.sin(y * 0.07 + this.elapsed * 0.2) * 0.08;
+      ctx.fillStyle = `rgba(${Math.round(120 * shade)}, ${Math.round(86 * shade)}, ${Math.round(54 * shade)}, 1)`;
+      ctx.fillRect(0, y, w, 2);
+    }
+    ctx.restore();
+
+    const floorY = 640;
+    const floor = ctx.createLinearGradient(0, floorY, 0, h);
+    floor.addColorStop(0, "rgba(182, 132, 72, 1)");
+    floor.addColorStop(1, "rgba(142, 96, 48, 1)");
+    ctx.fillStyle = floor;
+    ctx.fillRect(0, floorY, w, h - floorY);
+
+    // Straw scribbles
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.strokeStyle = "rgba(255, 232, 150, 1)";
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 26; i += 1) {
+      const x = ((i * 137) % w) + 40;
+      const y = floorY + 30 + ((i * 91) % 210);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.quadraticCurveTo(x + 40, y - 10, x + 90, y + 8);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Subtle vignette so the interior reads like a cutscene.
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  drawInteriorProp(ctx, game, round) {
+    // Props are placed in interior coordinates; y is treated as "ground" baseline.
+    const x = round.x;
+    const y = round.y;
+    const w = round.w;
+    const h = round.h;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(x, y + 22, w * 0.36, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (round.kind === "hay") {
+      const hay = game.assets.get("hay");
+      drawSprite(ctx, hay, x, y - h * 0.55, w, h, { alpha: 1 });
+    } else if (round.kind === "eggs") {
+      const egg = game.assets.get("egg");
+      // A simple stack: 3 eggs with slight offsets.
+      drawSprite(ctx, egg, x - 36, y - 78, w * 0.55, h * 0.62, { alpha: 1 });
+      drawSprite(ctx, egg, x + 22, y - 70, w * 0.58, h * 0.66, { alpha: 1 });
+      drawSprite(ctx, egg, x - 6, y - 30, w * 0.62, h * 0.7, { alpha: 1 });
+    } else {
+      // Barrel (procedural)
+      const gx = ctx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
+      gx.addColorStop(0, "rgba(146, 62, 40, 1)");
+      gx.addColorStop(0.5, "rgba(190, 86, 52, 1)");
+      gx.addColorStop(1, "rgba(126, 52, 34, 1)");
+
+      ctx.fillStyle = gx;
+      ctx.strokeStyle = "rgba(70, 30, 22, 0.45)";
+      ctx.lineWidth = 4;
+      // Avoid ctx.roundRect() for broader Safari/iPad compatibility.
+      const r = 26;
+      const x0 = x - w / 2;
+      const x1 = x + w / 2;
+      const y0 = y - h;
+      const y1 = y;
+      ctx.beginPath();
+      ctx.moveTo(x0 + r, y0);
+      ctx.lineTo(x1 - r, y0);
+      ctx.quadraticCurveTo(x1, y0, x1, y0 + r);
+      ctx.lineTo(x1, y1 - r);
+      ctx.quadraticCurveTo(x1, y1, x1 - r, y1);
+      ctx.lineTo(x0 + r, y1);
+      ctx.quadraticCurveTo(x0, y1, x0, y1 - r);
+      ctx.lineTo(x0, y0 + r);
+      ctx.quadraticCurveTo(x0, y0, x0 + r, y0);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(255, 220, 170, 0.18)";
+      ctx.lineWidth = 3;
+      for (let i = -1; i <= 1; i += 1) {
+        const yy = y - h * (0.28 + 0.23 * (i + 1));
+        ctx.beginPath();
+        ctx.moveTo(x - w * 0.46, yy);
+        ctx.lineTo(x + w * 0.46, yy);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  drawSparkles(ctx) {
+    if (!this.sparkles.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const sp of this.sparkles) {
+      const a = clamp(sp.life * 2.4, 0, 1);
+      if (a <= 0.001) continue;
+      ctx.globalAlpha = a;
+      const col = `hsla(${sp.hue}, 98%, 72%, 1)`;
+      ctx.fillStyle = col;
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, sp.size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  drawConfetti(ctx) {
+    for (const bit of this.confetti) {
+      ctx.save();
+      ctx.translate(bit.x, bit.y);
+      ctx.rotate(bit.angle);
+      ctx.fillStyle = bit.color;
+      ctx.globalAlpha = Math.max(0, bit.life * 0.55);
+      ctx.fillRect(-4, -2, 8, 4);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  drawFront(ctx, game) {
+    const chickenSprite = game.assets.get("chicken");
+
+    if (this.stage !== "exterior") return;
+
+    // Exterior: actor first so coop can occlude entrance/exit.
+    this.drawChickenActor(ctx, chickenSprite, { skipShadow: true });
+    this.drawCoop(ctx, game);
+    this.drawConfetti(ctx);
+    this.drawSparkles(ctx);
+  }
+
+  getCinematicCue(game) {
+    if (this.stage === "interior") {
+      const round = this.currentRound();
+      const focusX = this.state === "hide-wait" ? round.x : this.actor.x;
+      const focusY = this.state === "hide-wait" ? round.y - round.h * 0.55 : this.actor.y - 40;
+      return {
+        priority: 10,
+        focusX,
+        focusY,
+        zoom: this.state === "pop-out" ? 1.2 : 1.14,
+        vignette: 0.42,
+        nightBlend: 0,
+        ambienceDuck: 0.55,
+      };
+    }
+
+    const m = this.coopMetrics(game);
+    return {
+      priority: 9,
+      focusX: m.x,
+      focusY: m.y - m.h * 0.35,
+      zoom: this.state === "roll-in" ? 1.06 : 1.1,
+      vignette: 0.34,
+      nightBlend: 0,
+      ambienceDuck: 0.45,
+    };
+  }
+
+  drawOverlay(ctx, game) {
+    if (this.stage === "interior") {
+      this.drawCoopInterior(ctx, game);
+
+      const chickenSprite = game.assets.get("chicken");
+      const round = this.currentRound();
+      const popFront = this.state === "pop-out" || this.state === "move-hide" || this.state === "celebrate";
+
+      // When hiding, the prop should cover most of the chicken (only part sticking out).
+      if (!popFront) {
+        this.drawChickenActor(ctx, chickenSprite, { skipShadow: true });
+        this.drawInteriorProp(ctx, game, round);
+      } else {
+        this.drawInteriorProp(ctx, game, round);
+        this.drawChickenActor(ctx, chickenSprite, { skipShadow: true });
+      }
+
+      this.drawConfetti(ctx);
+      this.drawSparkles(ctx);
+    }
+
+    if (this.fade > 0.001) {
+      ctx.fillStyle = `rgba(0,0,0,${clamp(this.fade, 0, 1)})`;
+      ctx.fillRect(0, 0, game.world.width, game.world.height);
+    }
+  }
+
+  onFinish(game) {
+    game.chicken.clearController("peekaboo-coop");
+    game.chicken.cluckTimer = this.prevCluckTimer || 0;
+
+    game.chicken.u = this.baseU;
+    game.chicken.v = this.baseV;
+    game.chicken.projectFromUV();
+    game.chicken.y = game.chicken.groundY;
+  }
+}
+
 
 class DiscoAction extends GameAction {
   constructor() {
@@ -2536,6 +3222,7 @@ export function registerDefaultActions(registry) {
   registry.register({ id: "fireworks", weight: 1.2, create: () => new FireworksAction() });
   registry.register({ id: "jetpack", weight: 1, create: () => new JetpackAction() });
   registry.register({ id: "potty", weight: 2.4, create: () => new OuthousePottyAction() });
+  registry.register({ id: "peekaboo-coop", weight: 0.95, create: () => new PeekabooCoopAction() });
   registry.register({ id: "disco", weight: 1, create: () => new DiscoAction() });
   registry.register({ id: "egg-hatch", weight: 1.1, create: () => new EggHatchAction() });
   registry.register({ id: "chick-parade", weight: 0.95, create: () => new ChickParadeAction() });

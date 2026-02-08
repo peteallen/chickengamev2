@@ -33,6 +33,7 @@ SRC = {
     "butterfly": "butterfly-v3",
     "rain-cloud": "rain-cloud-v3",
     "rainbow": "rainbow-v3",
+    "coop": "coop-v5",
     "barn": "barn-v5",
 }
 
@@ -48,6 +49,7 @@ SIZES = {
     "butterfly": (520, 380),
     "rain-cloud": (560, 360),
     "rainbow": (620, 360),
+    "coop": (760, 620),
     "barn": (640, 640),
 }
 
@@ -264,4 +266,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

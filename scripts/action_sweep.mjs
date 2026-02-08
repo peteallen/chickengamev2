@@ -16,6 +16,7 @@ const HERO_ACTIONS = [
   { id: "jetpack", durationMs: 13200 },
   { id: "fireworks", durationMs: 5200 },
   { id: "disco", durationMs: 8000 },
+  { id: "peekaboo-coop", durationMs: 10800 },
 ];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,6 +93,11 @@ async function runActionStoryboard(page, actionId, durationMs, frames = 10) {
   const telemetry = [];
   const interval = Math.max(120, Math.floor(durationMs / Math.max(1, frames - 1)));
   for (let i = 0; i < frames; i += 1) {
+    if (actionId === "peekaboo-coop" && (i === 4 || i === 6 || i === 8)) {
+      // Peekaboo coop is tap-gated during interior hiding; click to advance the 3 reveals.
+      await page.mouse.click(640, 650);
+      await page.waitForTimeout(120);
+    }
     telemetry.push(await readFrameTelemetry(page, actionId));
     const shotPath = path.join(OUT_DIR, `${actionId}-${String(i + 1).padStart(2, "0")}.png`);
     await page.screenshot({ path: shotPath });
@@ -232,7 +238,7 @@ async function main() {
     }
 
     for (const hero of HERO_ACTIONS) {
-      const frames = hero.id === "jetpack" ? 12 : 10;
+      const frames = hero.id === "jetpack" || hero.id === "peekaboo-coop" ? 12 : 10;
       runs[hero.id] = await runActionStoryboard(page, hero.id, hero.durationMs, frames);
     }
     runs["rainbow-rain"] = await runActionStoryboard(page, "rainbow-rain", 6400, 10);
