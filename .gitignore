@@ -10,6 +10,8 @@ tmp-*.png
 
 # Python venv
 .venv/
+__pycache__/
+*.pyc
 
 # OS/editor
 .DS_Store
@@ -19,4 +21,3 @@ tmp-*.png
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
