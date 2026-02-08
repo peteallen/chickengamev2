@@ -3,11 +3,11 @@ from pathlib import Path
 
 from PIL import Image
 
-ROOT = Path("/Users/peteallen/work/chickengame/v4")
-OUT = ROOT / "public/assets/sprites/locked"
+ROOT = Path(__file__).resolve().parents[2]
+OUT = ROOT / "art/assets-src/sprites-locked-extras"
 OUT.mkdir(parents=True, exist_ok=True)
 
-BASE_CHICKEN = OUT / "chicken.png"
+BASE_CHICKEN = ROOT / "public/assets/sprites/locked/chicken.png"
 CANVAS_SIZE = (640, 640)
 FILL = 0.84
 

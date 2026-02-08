@@ -82,31 +82,29 @@ export class SoundEngine {
       eggSong2: { url: "./public/assets/sfx/chicken/egg_song_02.mp3", gain: 0.92, rateJitter: 0.02 },
       purr1: { url: "./public/assets/sfx/chicken/purr_01.mp3", gain: 0.52, rateJitter: 0.02 },
       purr2: { url: "./public/assets/sfx/chicken/purr_02.mp3", gain: 0.52, rateJitter: 0.02 },
-      wingFlap1: { url: "./public/assets/sfx/chicken/wing_flap_01.mp3", gain: 0.58, rateJitter: 0.02 },
-      wingFlap2: { url: "./public/assets/sfx/chicken/wing_flap_02.mp3", gain: 0.58, rateJitter: 0.02 },
       peckScratch1: { url: "./public/assets/sfx/chicken/peck_scratch_01.mp3", gain: 0.48, rateJitter: 0.02 },
       // Sparkle is used in several "celebration" actions; keep it subtle to avoid fatigue.
       // Cache-bust so returning players pick up the less-obnoxious sparkle.
       sparkle: { url: "./public/assets/sfx/sparkle.mp3?v=soft1", gain: 0.7, rateJitter: 0.04 },
       // Dedicated, softer SFX for specific actions.
       confettiSprinkle1: {
-        url: "./public/assets/sfx/confetti_sprinkle_01.mp3?v=soft1",
-        gain: 0.85,
+        url: "./public/assets/sfx/confetti_sprinkle_01.mp3?v=soft2",
+        gain: 1.0,
         rateJitter: 0.02,
       },
       confettiSprinkle2: {
-        url: "./public/assets/sfx/confetti_sprinkle_02.mp3?v=soft1",
-        gain: 0.85,
+        url: "./public/assets/sfx/confetti_sprinkle_02.mp3?v=soft2",
+        gain: 1.0,
         rateJitter: 0.02,
       },
-      starTwinkle1: { url: "./public/assets/sfx/star_twinkle_01.mp3?v=soft1", gain: 0.75, rateJitter: 0.03 },
-      starTwinkle2: { url: "./public/assets/sfx/star_twinkle_02.mp3?v=soft1", gain: 0.75, rateJitter: 0.03 },
+      starTwinkle1: { url: "./public/assets/sfx/star_twinkle_01.mp3?v=soft2", gain: 0.95, rateJitter: 0.03 },
+      starTwinkle2: { url: "./public/assets/sfx/star_twinkle_02.mp3?v=soft2", gain: 0.95, rateJitter: 0.03 },
       boing: { url: "./public/assets/sfx/boing.mp3", gain: 0.9, rateJitter: 0.04 },
       bubblePop: { url: "./public/assets/sfx/bubble_pop.mp3", gain: 0.65, rateJitter: 0.05 },
       hayBaleDrop1: { url: "./public/assets/sfx/hay_bale_drop_01.mp3", gain: 0.82, rateJitter: 0.03 },
       hayBaleDrop2: { url: "./public/assets/sfx/hay_bale_drop_02.mp3", gain: 0.82, rateJitter: 0.03 },
       // Cache-bust so returning players pick up the updated rumbling tractor sound.
-      tractorHorn: { url: "./public/assets/sfx/tractor_horn.mp3?v=rumble3", gain: 0.85, rateJitter: 0.02 },
+      tractorHorn: { url: "./public/assets/sfx/tractor_horn.mp3?v=rumble4", gain: 0.85, rateJitter: 0.02 },
       eggDrop: { url: "./public/assets/sfx/egg_drop.mp3", gain: 0.7, rateJitter: 0.03 },
       hatch: { url: "./public/assets/sfx/hatch.mp3", gain: 0.95, rateJitter: 0.02 },
       flush: { url: "./public/assets/sfx/flush.mp3", gain: 0.9, rateJitter: 0.02 },
@@ -519,12 +517,6 @@ export class SoundEngine {
     const i = this.pickVariant("purr", 2);
     if (this.playSample(`purr${i}`, { gain, rate })) return;
     this.playTone({ freq: 260, type: "sine", duration: 0.25, gain: 0.03 * gain, freqEnd: 220 });
-  }
-
-  wingFlap({ gain = 1, rate = 1 } = {}) {
-    const i = this.pickVariant("wingFlap", 2);
-    if (this.playSample(`wingFlap${i}`, { gain, rate })) return;
-    this.playNoise({ duration: 0.12, gain: 0.045 * gain, lowpass: 4200, highpass: 240, playbackRate: 0.9 * rate });
   }
 
   peckScratch({ gain = 1, rate = 1 } = {}) {

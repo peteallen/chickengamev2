@@ -2294,7 +2294,7 @@ class CornConfettiAction extends GameAction {
   start(game) {
     // Audible but gentle: one cue on start, then occasional soft sprinkles while it falls.
     this.sfxTimer = randRange(0.65, 1.05);
-    game.sound.confettiSprinkle({ gain: 0.9 });
+    game.sound.confettiSprinkle({ gain: 1.0 });
   }
 
   update(dt, game) {
@@ -2302,8 +2302,8 @@ class CornConfettiAction extends GameAction {
 
     this.sfxTimer -= dt;
     if (this.sfxTimer <= 0) {
-      this.sfxTimer = randRange(0.9, 1.45);
-      game.sound.confettiSprinkle({ gain: 0.55 });
+      this.sfxTimer = randRange(0.75, 1.25);
+      game.sound.confettiSprinkle({ gain: 0.75 });
     }
 
     for (let i = 0; i < 18; i += 1) {
@@ -2380,7 +2380,7 @@ class StarShowerAction extends GameAction {
     if (this.twinkleTimer <= 0) {
       // Keep it a vibe, not a metronome.
       this.twinkleTimer = randRange(0.7, 1.25);
-      game.sound.starTwinkle({ gain: 0.75 });
+      game.sound.starTwinkle({ gain: 0.9 });
     }
 
     for (const star of this.stars) {

@@ -23,6 +23,7 @@ python3 -m http.server 4173
 - Potty drop + poop/pee + flush swirl
 - Disco party (dance floor + disco ball + lights)
 - Egg laying + hatching + follower chick
+- Coop peekaboo (hide + window eyes + reveal)
 - Rain cloud + rainbow
 - Butterfly parade
 - Tractor zoom-by
@@ -47,6 +48,9 @@ Generated using skills:
 - Primary attempt: `imagegen` (OpenAI) -> unavailable because `OPENAI_API_KEY` was not set.
 - Fallback used: `openrouter-imagegen` with `OPENROUTER_API_KEY`.
 
-Generated outputs are in:
-- `public/assets/`
-- Runtime optimized sprites in `public/assets/sprites/`
+Runtime assets (shipped) live in:
+- `public/assets/sprites/locked/`
+- `public/assets/sfx/`
+
+Development/source assets (not shipped) live in:
+- `art/`

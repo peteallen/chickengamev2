@@ -32,15 +32,6 @@ export class PenSpace {
     this.recompute();
   }
 
-  update({ x, y, w, h, skew = this.skew }) {
-    this.x = x;
-    this.y = y;
-    this.w = w;
-    this.h = h;
-    this.skew = skew;
-    this.recompute();
-  }
-
   recompute() {
     this.backLeft = { x: this.x + this.skew, y: this.y };
     this.backRight = { x: this.x + this.w - this.skew, y: this.y };
@@ -84,10 +75,6 @@ export class PenSpace {
     return { u, v };
   }
 
-  containsUV(u, v) {
-    return u >= 0 && u <= 1 && v >= 0 && v <= 1;
-  }
-
   containsPoint(x, y) {
     const p = { x, y };
     const c0 = this.backLeft;
@@ -105,4 +92,3 @@ export class PenSpace {
     return this.toScreen(1, tt);
   }
 }
-
