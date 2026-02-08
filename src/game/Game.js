@@ -22,6 +22,9 @@ const ASSET_MANIFEST = {
   parachute: "./public/assets/sprites/locked/parachute.png?v=locked1",
   discoBall: "./public/assets/sprites/locked/disco-ball.png?v=locked3",
   coop: "./public/assets/sprites/locked/coop.png?v=locked1",
+  coopClosed: "./public/assets/sprites/locked/coop.png?v=locked1",
+  coopOpen: "./public/assets/sprites/locked/coop-open.png?v=locked1",
+  chickenPeek: "./public/assets/sprites/locked/chicken-peek.png?v=locked1",
   tractor: "./public/assets/sprites/locked/tractor.png?v=locked3",
   hay: "./public/assets/sprites/locked/hay.png?v=locked3",
   butterfly: "./public/assets/sprites/locked/butterfly.png?v=locked3",
@@ -73,6 +76,8 @@ export class Game {
 
     // Static pen prop (kept simple; actions can temporarily flip door state).
     this.outhouse = { u: 0.3, v: 0.35, doorOpen: false };
+    // Static pen prop (actions can temporarily flip door state).
+    this.coop = { u: 0.7, v: 0.64, doorOpen: false };
 
     this.view = {
       width: window.innerWidth,
@@ -576,7 +581,30 @@ export class Game {
       ctx.fillRect(rightPost.x - 6, rightPost.y - 34, 12, 52);
     }
 
+    this.drawCoop(ctx);
     this.drawOuthouse(ctx);
+  }
+
+  drawCoop(ctx) {
+    const coop = this.assets.get(this.coop?.doorOpen ? "coopOpen" : "coopClosed");
+    const u = this.coop?.u ?? 0.7;
+    const v = this.coop?.v ?? 0.64;
+
+    const p = this.penSpace.toScreen(u, v);
+    const s = this.penSpace.depthScale(v);
+
+    // Keep sprite proportions correct (no squishing); size scales with pen depth.
+    const spriteW = coop?.width || 760;
+    const spriteH = coop?.height || 620;
+    const aspect = spriteW / spriteH;
+    const h = 290 * s;
+    const w = h * aspect;
+    const x = p.x;
+    const y = p.y;
+
+    ctx.save();
+    ctx.drawImage(coop, x - w / 2, y - h, w, h);
+    ctx.restore();
   }
 
 	  drawOuthouse(ctx) {
