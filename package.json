@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "check:actions": "node scripts/action_sweep.mjs",
-    "build:hero-assets": ".venv/bin/python scripts/build_locked_hero_assets.py"
+    "check:public-assets": "python3 scripts/audit_public_assets.py",
+    "build:locked-assets": "python3 scripts/build_locked_assets.py"
   },
   "keywords": [],
   "author": "",

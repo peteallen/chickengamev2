@@ -3,16 +3,16 @@ from pathlib import Path
 from PIL import Image
 import numpy as np
 
-ROOT = Path('/Users/peteallen/work/chickengame/v4')
-RAW = ROOT / 'public/assets/generated-v3/raw'
-OUT = ROOT / 'public/assets/sprites/fresh'
+ROOT = Path(__file__).resolve().parents[2]
+RAW = ROOT / 'art/public-assets/generated-v3/raw'
+OUT = ROOT / 'art/public-assets/sprites/final'
 OUT.mkdir(parents=True, exist_ok=True)
 
 PREFERRED = {
-    'chicken': 'chicken-v3d',
-    'chick': 'chick-v3c',
-    'egg': 'egg-v3d',
-    'potty': 'potty-v3d',
+    'chicken': 'chicken-v6',
+    'chick': 'chick-v6',
+    'egg': 'egg-v6',
+    'potty': 'potty-v6',
     'jetpack': 'jetpack-v3c',
     'disco-ball': 'disco-ball-v3c',
     'tractor': 'tractor-v3c',
@@ -20,8 +20,8 @@ PREFERRED = {
     'butterfly': 'butterfly-v3c',
     'rain-cloud': 'rain-cloud-v3c',
     'rainbow': 'rainbow-v3c',
-    'coop': 'coop-v3d',
-    'barn': 'barn-v3d',
+    'coop': 'coop-v5',
+    'barn': 'barn-v5',
 }
 
 SIZES = {
@@ -49,16 +49,7 @@ def find_src(stem: str) -> Path:
     raise FileNotFoundError(stem)
 
 
-def alpha_from_chroma(arr: np.ndarray) -> np.ndarray:
-    r = arr[:, :, 0].astype(np.int16)
-    g = arr[:, :, 1].astype(np.int16)
-    b = arr[:, :, 2].astype(np.int16)
-    # key out vivid green background and fringe
-    green = (g > 150) & (g > r + 28) & (g > b + 28)
-    return np.where(green, 0, 255).astype(np.uint8)
-
-
-def alpha_from_checker(arr: np.ndarray) -> np.ndarray:
+def key_checker(arr: np.ndarray) -> np.ndarray:
     r = arr[:, :, 0].astype(np.int16)
     g = arr[:, :, 1].astype(np.int16)
     b = arr[:, :, 2].astype(np.int16)
@@ -68,23 +59,18 @@ def alpha_from_checker(arr: np.ndarray) -> np.ndarray:
     lum = (r + g + b) // 3
     bg = sat < 24
     near = np.zeros_like(bg)
-    for c in (88, 102, 116, 130, 144, 158, 172, 186, 200, 214, 228):
+    for c in (80, 94, 108, 122, 136, 150, 164, 178, 192, 206, 220, 234):
         near |= np.abs(lum - c) <= 10
     bg &= near
     return np.where(bg, 0, 255).astype(np.uint8)
 
 
-def process_one(key: str, stem: str) -> None:
+def process_asset(key: str, stem: str) -> None:
     src = find_src(stem)
-    arr = np.array(Image.open(src).convert('RGB'))
+    rgb = np.array(Image.open(src).convert('RGB'))
 
-    green_mask = (arr[:, :, 1] > 150) & (arr[:, :, 1] > arr[:, :, 0] + 28) & (arr[:, :, 1] > arr[:, :, 2] + 28)
-    if green_mask.sum() > arr.shape[0] * arr.shape[1] * 0.08:
-        alpha = alpha_from_chroma(arr)
-    else:
-        alpha = alpha_from_checker(arr)
-
-    if (alpha > 0).sum() < 1500:
+    alpha = key_checker(rgb)
+    if (alpha > 0).sum() < 2500:
         alpha[:] = 255
 
     ys, xs = np.where(alpha > 8)
@@ -95,18 +81,15 @@ def process_one(key: str, stem: str) -> None:
     x0, x1 = xs.min(), xs.max() + 1
     y0, y1 = ys.min(), ys.max() + 1
 
-    crop = arr[y0:y1, x0:x1]
+    crop_rgb = rgb[y0:y1, x0:x1]
     crop_a = alpha[y0:y1, x0:x1]
 
-    rgba = np.dstack([crop, crop_a])
+    rgba = np.dstack([crop_rgb, crop_a])
     sprite = Image.fromarray(rgba, 'RGBA')
 
     tw, th = SIZES[key]
     scale = min((tw * 0.84) / sprite.width, (th * 0.84) / sprite.height)
-    sprite = sprite.resize(
-        (max(1, int(sprite.width * scale)), max(1, int(sprite.height * scale))),
-        Image.LANCZOS,
-    )
+    sprite = sprite.resize((max(1, int(sprite.width * scale)), max(1, int(sprite.height * scale))), Image.LANCZOS)
 
     canvas = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
     px = (tw - sprite.width) // 2
@@ -120,7 +103,7 @@ def process_one(key: str, stem: str) -> None:
 
 def main() -> None:
     for key, stem in PREFERRED.items():
-        process_one(key, stem)
+        process_asset(key, stem)
 
 
 if __name__ == '__main__':
