@@ -11,10 +11,11 @@ const PORT = 4173;
 const BASE_URL = `http://127.0.0.1:${PORT}/index.html`;
 const OUT_DIR = path.join(ROOT, "tmp", "runtime-check");
 const HERO_ACTIONS = [
-  { id: "potty", durationMs: 9800 },
+  { id: "potty", durationMs: 11600 },
   { id: "egg-hatch", durationMs: 7800 },
-  { id: "jetpack", durationMs: 8200 },
+  { id: "jetpack", durationMs: 13200 },
   { id: "fireworks", durationMs: 5200 },
+  { id: "disco", durationMs: 8000 },
 ];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -128,6 +129,9 @@ function evaluateInvariants(results, idleTelemetry, pageErrors, consoleErrors) {
   const fireworksTelemetry = results.fireworks || [];
   const maxNightBlend = fireworksTelemetry.reduce((max, entry) => Math.max(max, entry.nightBlend || 0), 0);
 
+  const discoTelemetry = results.disco || [];
+  const discoMaxNightBlend = discoTelemetry.reduce((max, entry) => Math.max(max, entry.nightBlend || 0), 0);
+
   const idleXRange = range(idleTelemetry.map((entry) => entry.chickenX));
   const idleYRange = range(idleTelemetry.map((entry) => entry.chickenGroundY));
 
@@ -155,6 +159,10 @@ function evaluateInvariants(results, idleTelemetry, pageErrors, consoleErrors) {
     fireworksNightBlend: {
       pass: maxNightBlend >= 0.72,
       details: { maxNightBlend },
+    },
+    discoNightBlend: {
+      pass: discoMaxNightBlend >= 0.7,
+      details: { discoMaxNightBlend },
     },
     idleMovementXY: {
       pass: idleXRange >= 45 && idleYRange >= 10,
@@ -224,7 +232,8 @@ async function main() {
     }
 
     for (const hero of HERO_ACTIONS) {
-      runs[hero.id] = await runActionStoryboard(page, hero.id, hero.durationMs, 10);
+      const frames = hero.id === "jetpack" ? 12 : 10;
+      runs[hero.id] = await runActionStoryboard(page, hero.id, hero.durationMs, frames);
     }
     runs["rainbow-rain"] = await runActionStoryboard(page, "rainbow-rain", 6400, 10);
 
@@ -236,7 +245,8 @@ async function main() {
       invariants,
       allPass,
       storyboards: Object.keys(runs).reduce((acc, actionId) => {
-        acc[actionId] = Array.from({ length: 10 }, (_, i) => `${actionId}-${String(i + 1).padStart(2, "0")}.png`);
+        const frames = actionId === "jetpack" ? 12 : 10;
+        acc[actionId] = Array.from({ length: frames }, (_, i) => `${actionId}-${String(i + 1).padStart(2, "0")}.png`);
         return acc;
       }, {}),
     };

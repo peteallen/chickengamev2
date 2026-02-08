@@ -18,14 +18,19 @@ const ASSET_MANIFEST = {
   pottyStrain: "./public/assets/sprites/locked/potty-strain.png?v=locked1",
   jetpack: "./public/assets/sprites/locked/jetpack.png?v=locked3",
   chickenJetpack: "./public/assets/sprites/locked/chicken-jetpack.png?v=locked1",
+  jetpackSkyColumn: "./public/assets/sprites/locked/jetpack-sky-column.png?v=locked1",
+  parachute: "./public/assets/sprites/locked/parachute.png?v=locked1",
   discoBall: "./public/assets/sprites/locked/disco-ball.png?v=locked3",
   tractor: "./public/assets/sprites/locked/tractor.png?v=locked3",
   hay: "./public/assets/sprites/locked/hay.png?v=locked3",
   butterfly: "./public/assets/sprites/locked/butterfly.png?v=locked3",
   rainCloud: "./public/assets/sprites/locked/rain-cloud.png?v=locked3",
   rainbow: "./public/assets/sprites/locked/rainbow.png?v=locked3",
-  coop: "./public/assets/sprites/locked/coop.png?v=locked4",
   barn: "./public/assets/sprites/locked/barn.png?v=locked5",
+  outhouseClosed: "./public/assets/sprites/locked/outhouse-closed.png?v=locked1",
+  outhouseOpen: "./public/assets/sprites/locked/outhouse-open.png?v=locked1",
+  outhouseInteriorOff: "./public/assets/sprites/locked/outhouse-interior-off.png?v=locked1",
+  outhouseInteriorOn: "./public/assets/sprites/locked/outhouse-interior-on.png?v=locked1",
 };
 
 export class Game {
@@ -64,9 +69,9 @@ export class Game {
     this.flowers = this.createFlowerDots();
 
     this.isRaining = false;
-    this.interactionTapCount = 0;
-    this.pottyShown = false;
-    this.lastPottyTap = 0;
+
+    // Static pen prop (kept simple; actions can temporarily flip door state).
+    this.outhouse = { u: 0.3, v: 0.35, doorOpen: false };
 
     this.view = {
       width: window.innerWidth,
@@ -155,11 +160,7 @@ export class Game {
     const tapInsidePen = this.isInsidePen(x, y);
     if (this.chicken.containsPoint(x, y) || tapInsidePen) {
       this.sound.cluck();
-      this.interactionTapCount += 1;
-
-      const tapsSincePotty = this.interactionTapCount - this.lastPottyTap;
-      const shouldForcePotty = !this.pottyShown || tapsSincePotty >= 4;
-      this.triggerRandomAction(shouldForcePotty ? "potty" : null);
+      this.triggerRandomAction();
       return;
     }
 
@@ -194,11 +195,6 @@ export class Game {
         existing.cancel(this);
         this.activeActions.splice(i, 1);
       }
-    }
-
-    if (action.id === "potty") {
-      this.pottyShown = true;
-      this.lastPottyTap = this.interactionTapCount;
     }
 
     for (let i = this.activeActions.length - 1; i >= 0; i -= 1) {
@@ -433,47 +429,61 @@ export class Game {
 
     this.drawTerrainBand(ctx, (x) => this.terrainYAt(x), grass);
 
-    const coop = this.assets.get("coop");
     const barn = this.assets.get("barn");
 
     ctx.save();
     ctx.globalAlpha = this.isRaining ? 0.9 : 1;
 
-    const coopW = 214;
-    const coopH = 172;
-    const coopX = this.pen.x + this.pen.w * 0.5 - coopW / 2;
-    const coopBaseY = this.terrainBackYAt(coopX + coopW * 0.5) + 2;
-    const coopY = coopBaseY - coopH;
+			    const barnW = 226;
+			    const barnH = 210;
+			    const barnX = 1310;
+		    // Match the terrain band's polyline sampling (16px) so props align to the visible ridge.
+		    const terrainBackYRendered = (x) => {
+		      const step = 16;
+		      const x0 = Math.floor(x / step) * step;
+		      const x1 = Math.min(this.world.width, x0 + step);
+		      const y0 = this.terrainBackYAt(x0);
+		      const y1 = this.terrainBackYAt(x1);
+		      const t = x1 === x0 ? 0 : (x - x0) / (x1 - x0);
+		      return y0 + (y1 - y0) * t;
+		    };
 
-	    const barnW = 226;
-	    const barnH = 210;
-	    const barnX = 1310;
-	    // Use the lowest (max Y) point under the barn footprint so it doesn't "float" on sloped terrain.
-	    let barnBaseY = -Infinity;
-		    for (let x = barnX; x <= barnX + barnW; x += 8) {
-		      barnBaseY = Math.max(barnBaseY, this.terrainBackYAt(x));
-		    }
-		    barnBaseY += 1;
+			    // Use the lowest (max Y) point under the barn footprint so it doesn't "float" on sloped terrain.
+			    let barnBaseY = -Infinity;
+			    for (let x = barnX; x <= barnX + barnW; x += 8) {
+			      barnBaseY = Math.max(barnBaseY, terrainBackYRendered(x));
+			    }
+			    barnBaseY += 0;
 
-		    // The barn sprite includes a little extra visual "fringe" below the painted base.
-		    // Anchor the painted base to the terrain so it doesn't read as hovering.
-		    const barnBasePadY = 12;
-		    const barnY = barnBaseY - barnH + barnBasePadY;
+				    // Nudge down so the base reads as grounded.
+				    const barnY = barnBaseY - barnH + 46;
 
-		    ctx.fillStyle = "rgba(70, 88, 56, 0.14)";
-		    ctx.beginPath();
-		    ctx.ellipse(coopX + coopW * 0.5, coopBaseY, 78, 13, 0, 0, Math.PI * 2);
-		    ctx.fill();
-		    ctx.beginPath();
-		    // Contact shadow: keep it tight to the barn base so it doesn't read as hovering.
-		    // Tie the shadow to the sprite's visual base (not the terrain sample point) to avoid a visible gap on slopes.
-		    const barnShadowY = barnY + barnH - 14;
-		    ctx.ellipse(barnX + barnW * 0.5, barnShadowY, 84, 8, 0, 0, Math.PI * 2);
-		    ctx.fill();
+				    ctx.fillStyle = "rgba(70, 88, 56, 0.14)";
+				    // Barn shadow clipped to the hill (so it can't float in the sky).
+				    const barnCX = barnX + barnW * 0.5;
+				    const shadowY = terrainBackYRendered(barnCX) + 7;
+			    const shadowAngle = Math.atan2(
+			      terrainBackYRendered(barnCX + 16) - terrainBackYRendered(barnCX - 16),
+			      32,
+			    );
+			    ctx.save();
+			    ctx.beginPath();
+			    ctx.moveTo(0, terrainBackYRendered(0));
+			    for (let x = 16; x <= this.world.width; x += 16) {
+			      ctx.lineTo(x, terrainBackYRendered(x));
+			    }
+			    ctx.lineTo(this.world.width, this.world.height);
+			    ctx.lineTo(0, this.world.height);
+			    ctx.closePath();
+			    ctx.clip();
+			    ctx.fillStyle = "rgba(70, 88, 56, 0.12)";
+			    ctx.beginPath();
+			    ctx.ellipse(barnCX, shadowY, 70, 9, shadowAngle, 0, Math.PI * 2);
+				    ctx.fill();
+				    ctx.restore();
 
-    ctx.drawImage(coop, coopX, coopY, coopW, coopH);
-    ctx.drawImage(barn, barnX, barnY, barnW, barnH);
-    ctx.restore();
+			    ctx.drawImage(barn, barnX, barnY, barnW, barnH);
+			    ctx.restore();
 
     for (const dot of this.flowers) {
       const twinkle = 0.4 + Math.sin(this.time * 2.1 + dot.x * 0.02 + dot.y * 0.01) * 0.25;
@@ -528,6 +538,12 @@ export class Game {
       ctx.stroke();
     }
 
+    // Allow actions to draw effects that should appear on top of the pen "ground"
+    // but underneath fence rails/posts and props.
+    for (const action of this.activeActions) {
+      if (typeof action.drawPenFx === "function") action.drawPenFx(ctx, this);
+    }
+
     this.drawFenceRail(ctx, "back", 4, 12, 1);
     this.drawFenceRail(ctx, "back", 30, 10, 1);
     this.drawFenceRail(ctx, "left", 4, 10, 0.92);
@@ -548,7 +564,32 @@ export class Game {
       ctx.fillRect(leftPost.x - 6, leftPost.y - 34, 12, 52);
       ctx.fillRect(rightPost.x - 6, rightPost.y - 34, 12, 52);
     }
+
+    this.drawOuthouse(ctx);
   }
+
+	  drawOuthouse(ctx) {
+	    const outhouse = this.assets.get(this.outhouse?.doorOpen ? "outhouseOpen" : "outhouseClosed");
+	    const u = this.outhouse?.u ?? 0.3;
+	    const v = this.outhouse?.v ?? 0.35;
+
+	    const p = this.penSpace.toScreen(u, v);
+	    const s = this.penSpace.depthScale(v);
+
+	    // Keep sprite proportions correct (no squishing); size scales with pen depth.
+	    const spriteW = outhouse?.width || 760;
+	    const spriteH = outhouse?.height || 620;
+	    const aspect = spriteW / spriteH;
+	    // Match the prior vertical footprint, but preserve aspect ratio so it doesn't read squished.
+	    const h = 270 * s;
+	    const w = h * aspect;
+	    const x = p.x;
+	    const y = p.y;
+
+	    ctx.save();
+	    ctx.drawImage(outhouse, x - w / 2, y - h, w, h);
+	    ctx.restore();
+	  }
 
   drawPenFront(ctx) {
     const p = this.penSpace;
@@ -574,6 +615,11 @@ export class Game {
   }
 
   drawTapBursts(ctx) {
+    const suppress = this.activeActions.some(
+      (action) => typeof action.shouldSuppressTapBursts === "function" && action.shouldSuppressTapBursts(this),
+    );
+    if (suppress) return;
+
     for (const burst of this.tapBursts) {
       const alpha = Math.max(0, burst.life * 2);
 

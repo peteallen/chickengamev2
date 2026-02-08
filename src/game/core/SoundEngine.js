@@ -85,17 +85,45 @@ export class SoundEngine {
       wingFlap1: { url: "./public/assets/sfx/chicken/wing_flap_01.mp3", gain: 0.58, rateJitter: 0.02 },
       wingFlap2: { url: "./public/assets/sfx/chicken/wing_flap_02.mp3", gain: 0.58, rateJitter: 0.02 },
       peckScratch1: { url: "./public/assets/sfx/chicken/peck_scratch_01.mp3", gain: 0.48, rateJitter: 0.02 },
-      sparkle: { url: "./public/assets/sfx/sparkle.mp3", gain: 0.75, rateJitter: 0.04 },
+      // Sparkle is used in several "celebration" actions; keep it subtle to avoid fatigue.
+      // Cache-bust so returning players pick up the less-obnoxious sparkle.
+      sparkle: { url: "./public/assets/sfx/sparkle.mp3?v=soft1", gain: 0.7, rateJitter: 0.04 },
+      // Dedicated, softer SFX for specific actions.
+      confettiSprinkle1: {
+        url: "./public/assets/sfx/confetti_sprinkle_01.mp3?v=soft1",
+        gain: 0.85,
+        rateJitter: 0.02,
+      },
+      confettiSprinkle2: {
+        url: "./public/assets/sfx/confetti_sprinkle_02.mp3?v=soft1",
+        gain: 0.85,
+        rateJitter: 0.02,
+      },
+      starTwinkle1: { url: "./public/assets/sfx/star_twinkle_01.mp3?v=soft1", gain: 0.75, rateJitter: 0.03 },
+      starTwinkle2: { url: "./public/assets/sfx/star_twinkle_02.mp3?v=soft1", gain: 0.75, rateJitter: 0.03 },
       boing: { url: "./public/assets/sfx/boing.mp3", gain: 0.9, rateJitter: 0.04 },
       bubblePop: { url: "./public/assets/sfx/bubble_pop.mp3", gain: 0.65, rateJitter: 0.05 },
-      tractorHorn: { url: "./public/assets/sfx/tractor_horn.mp3", gain: 0.85, rateJitter: 0.02 },
+      hayBaleDrop1: { url: "./public/assets/sfx/hay_bale_drop_01.mp3", gain: 0.82, rateJitter: 0.03 },
+      hayBaleDrop2: { url: "./public/assets/sfx/hay_bale_drop_02.mp3", gain: 0.82, rateJitter: 0.03 },
+      // Cache-bust so returning players pick up the updated rumbling tractor sound.
+      tractorHorn: { url: "./public/assets/sfx/tractor_horn.mp3?v=rumble3", gain: 0.85, rateJitter: 0.02 },
       eggDrop: { url: "./public/assets/sfx/egg_drop.mp3", gain: 0.7, rateJitter: 0.03 },
       hatch: { url: "./public/assets/sfx/hatch.mp3", gain: 0.95, rateJitter: 0.02 },
       flush: { url: "./public/assets/sfx/flush.mp3", gain: 0.9, rateJitter: 0.02 },
+      doorCreakOpen: { url: "./public/assets/sfx/door_creak_open.mp3", gain: 0.7, rateJitter: 0.02 },
+      doorCreakClose: { url: "./public/assets/sfx/door_creak_close.mp3", gain: 0.7, rateJitter: 0.02 },
+      lightSwitch: { url: "./public/assets/sfx/light_switch_click.mp3", gain: 0.6, rateJitter: 0.01 },
       fireworkBurst: { url: "./public/assets/sfx/firework_burst.mp3", gain: 0.95, rateJitter: 0.03 },
       jetpackLoop: { url: "./public/assets/sfx/jetpack_loop.mp3", gain: 0.42 },
+      jetpackTakeoff: { url: "./public/assets/sfx/jetpack_takeoff.mp3", gain: 0.78, rateJitter: 0.015 },
+      windLoop: { url: "./public/assets/sfx/wind_loop.mp3", gain: 0.22 },
+      reverseThruster: { url: "./public/assets/sfx/reverse_thruster.mp3", gain: 0.72, rateJitter: 0.02 },
+      reentryFire: { url: "./public/assets/sfx/reentry_fire.mp3", gain: 0.82, rateJitter: 0.015 },
+      parachuteOpen: { url: "./public/assets/sfx/parachute_open.mp3", gain: 0.88, rateJitter: 0.02 },
+      jetpackMusicLoop: { url: "./public/assets/sfx/jetpack_music.mp3", gain: 0.26 },
       rainLoop: { url: "./public/assets/sfx/rain_loop.mp3", gain: 0.32 },
-      discoLoop: { url: "./public/assets/sfx/disco_loop.mp3", gain: 0.35 },
+      // Cache-bust so the newest loop is picked up even with force-cache.
+      discoLoop: { url: "./public/assets/sfx/disco_loop.mp3?v=slap1", gain: 0.45 },
     };
   }
 
@@ -523,6 +551,52 @@ export class SoundEngine {
     this.stopLoop("jetpack");
   }
 
+  jetpackTakeoff() {
+    if (this.playSample("jetpackTakeoff")) return;
+    // Fallback: brief sputter then whoosh.
+    this.playNoise({ duration: 0.12, gain: 0.07, lowpass: 2400, highpass: 180, playbackRate: 0.9 });
+    this.playTone({ freq: 140, type: "sawtooth", duration: 0.12, gain: 0.03, startAt: 0.08, freqEnd: 210 });
+    this.playNoise({ duration: 0.22, gain: 0.08, lowpass: 3200, highpass: 220, playbackRate: 1.05, startAt: 0.08 });
+  }
+
+  windStart() {
+    if (this.startLoopSample("wind", "windLoop")) return;
+    this.startLoop("wind", 120, () => {
+      this.playNoise({ duration: 0.12, gain: 0.04, lowpass: 5200, highpass: 420, playbackRate: 1.1 });
+    });
+  }
+
+  windStop() {
+    this.stopLoopSample("wind");
+    this.stopLoop("wind");
+  }
+
+  reverseThruster() {
+    if (this.playSample("reverseThruster")) return;
+    this.playNoise({ duration: 0.14, gain: 0.07, lowpass: 3400, highpass: 260, playbackRate: 1.2 });
+    this.playTone({ freq: 220, type: "triangle", duration: 0.12, gain: 0.03, freqEnd: 160 });
+  }
+
+  reentryFire() {
+    if (this.playSample("reentryFire")) return;
+    this.playNoise({ duration: 0.55, gain: 0.12, lowpass: 4200, highpass: 380, playbackRate: 1.0 });
+    this.playTone({ freq: 120, type: "sawtooth", duration: 0.4, gain: 0.03, freqEnd: 70 });
+  }
+
+  parachuteOpen() {
+    if (this.playSample("parachuteOpen")) return;
+    this.playTone({ freq: 520, type: "triangle", duration: 0.07, gain: 0.05, freqEnd: 680 });
+    this.playNoise({ duration: 0.12, gain: 0.04, lowpass: 5000, highpass: 800, playbackRate: 1.2 });
+  }
+
+  jetpackMusicStart() {
+    this.startLoopSample("jetpackMusic", "jetpackMusicLoop", { gain: 1, fadeIn: 0.25 });
+  }
+
+  jetpackMusicStop() {
+    this.stopLoopSample("jetpackMusic", { fadeOut: 0.35 });
+  }
+
   discoStart() {
     if (this.startLoopSample("disco", "discoLoop")) return;
     this.startLoop("disco", 340, () => {
@@ -555,6 +629,21 @@ export class SoundEngine {
     this.playNoise({ duration: 0.5, gain: 0.07, lowpass: 4800, highpass: 180 });
   }
 
+  doorCreakOpen() {
+    if (this.playSample("doorCreakOpen")) return;
+    this.tap();
+  }
+
+  doorCreakClose() {
+    if (this.playSample("doorCreakClose")) return;
+    this.tap();
+  }
+
+  lightSwitch() {
+    if (this.playSample("lightSwitch")) return;
+    this.tap();
+  }
+
   eggDrop() {
     if (this.playSample("eggDrop")) return;
     this.playTone({ freq: 410, type: "triangle", duration: 0.12, gain: 0.06, freqEnd: 280 });
@@ -568,8 +657,9 @@ export class SoundEngine {
 
   tractorHorn() {
     if (this.playSample("tractorHorn")) return;
-    this.playTone({ freq: 220, type: "sawtooth", duration: 0.2, gain: 0.08 });
-    this.playTone({ freq: 174, type: "sawtooth", duration: 0.22, gain: 0.08, startAt: 0.08 });
+    // Fallback: short diesel-ish rumble (used only if the sample fails to load).
+    this.playNoise({ duration: 0.3, gain: 0.06, lowpass: 520, highpass: 40, playbackRate: 0.85 });
+    this.playTone({ freq: 62, type: "sawtooth", duration: 0.34, gain: 0.03, freqEnd: 54 });
   }
 
   boing() {
@@ -577,9 +667,31 @@ export class SoundEngine {
     this.playTone({ freq: 320, type: "triangle", duration: 0.2, gain: 0.075, freqEnd: 120 });
   }
 
+  hayBaleDrop() {
+    const v = this.pickVariant("hayBaleDrop", 2);
+    if (this.playSample(`hayBaleDrop${v}`)) return;
+    // Fallback: soft thud + brief rustle.
+    this.playTone({ freq: 140, type: "triangle", duration: 0.09, gain: 0.075, freqEnd: 90 });
+    this.playNoise({ duration: 0.2, gain: 0.03, lowpass: 2400, highpass: 220, playbackRate: 0.9 });
+  }
+
   bubblePop() {
     if (this.playSample("bubblePop")) return;
     this.playTone({ freq: 900, type: "sine", duration: 0.06, gain: 0.05, freqEnd: 1200 });
+  }
+
+  confettiSprinkle({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("confettiSprinkle", 2);
+    if (this.playSample(`confettiSprinkle${i}`, { gain, rate })) return;
+    // Fallback: soft paper-ish rustle.
+    this.playNoise({ duration: 0.18, gain: 0.018 * gain, lowpass: 5200, highpass: 600, playbackRate: 0.95 * rate });
+  }
+
+  starTwinkle({ gain = 1, rate = 1 } = {}) {
+    const i = this.pickVariant("starTwinkle", 2);
+    if (this.playSample(`starTwinkle${i}`, { gain, rate })) return;
+    // Fallback: very gentle twinkle.
+    this.playTone({ freq: 980, type: "triangle", duration: 0.06, gain: 0.018 * gain, freqEnd: 1420 });
   }
 
   sparkle() {

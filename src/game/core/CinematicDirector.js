@@ -46,7 +46,8 @@ export class CinematicDirector {
     const smooth = clamp(dt * 4.6, 0, 1);
     this.state.focusX = lerp(this.state.focusX, clamp(target.focusX, 0, this.world.width), smooth);
     this.state.focusY = lerp(this.state.focusY, clamp(target.focusY, 0, this.world.height), smooth);
-    this.state.zoom = lerp(this.state.zoom, clamp(target.zoom, 1, 1.14), smooth);
+    // Allow hero beats to punch in further (e.g. potty flush zoom) while keeping bounds tight.
+    this.state.zoom = lerp(this.state.zoom, clamp(target.zoom, 1, 1.32), smooth);
     this.state.vignette = lerp(this.state.vignette, clamp(target.vignette, 0, 0.55), smooth);
     this.state.nightBlend = lerp(this.state.nightBlend, clamp(target.nightBlend, 0, 1), smooth);
     this.state.ambienceDuck = lerp(this.state.ambienceDuck, clamp(target.ambienceDuck, 0, 0.75), smooth);

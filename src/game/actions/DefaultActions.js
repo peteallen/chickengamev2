@@ -1,5 +1,9 @@
 import { clamp, easeOutCubic, randInt, randRange } from "../core/math.js";
 
+const easeInCubic = (t) => t * t * t;
+const easeInOutCubic = (t) =>
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
 class GameAction {
   constructor({ id, duration = 5, major = false }) {
     this.id = id;
@@ -19,6 +23,10 @@ class GameAction {
   }
 
   drawBack(_ctx, _game) {}
+
+  // Draw effects that must sit on top of the pen ground fill but below pen props/fences.
+  // Called from Game.drawPenBack().
+  drawPenFx(_ctx, _game) {}
 
   drawFront(_ctx, _game) {}
 
@@ -426,77 +434,305 @@ class FireworksAction extends GameAction {
 
 class JetpackAction extends GameAction {
   constructor() {
-    super({ id: "jetpack", duration: 8.2, major: true });
+    super({ id: "jetpack", duration: 13.2, major: true });
     this.flames = [];
-    this.phase = randRange(0, Math.PI * 2);
+    this.plasma = [];
+    this.stars = [];
+
     this.baseX = 0;
     this.baseY = 0;
-    this.centerX = 0;
-    this.centerY = 0;
+    this.baseU = 0.5;
+    this.baseV = 0.76;
+    this.baseDir = 1;
+    this.prevCluckTimer = 0;
+
+    this.actor = {
+      x: 800,
+      y: 650,
+      groundY: 650,
+      dir: 1,
+      rotation: 0,
+      alpha: 1,
+    };
+
+    this.overlayAlpha = 0;
+    this.altitude = 0; // 0..1
+    this.windOn = false;
+    this.parachuteOn = false;
+
+    this.lastCue = {
+      takeoff: false,
+      windStart: false,
+      windStop: false,
+      reverse: false,
+      reentry: false,
+      chute: false,
+    };
   }
 
   start(game) {
-    game.sound.jetpackStart();
+    this.elapsed = 0;
+
     this.baseX = game.chicken.x;
     this.baseY = game.chicken.y;
-    this.centerX = game.penSpace.anchors.center.x;
-    this.centerY = game.penSpace.anchors.center.y - 42;
+    this.baseU = game.chicken.u;
+    this.baseV = game.chicken.v;
+    this.baseDir = game.chicken.dir || 1;
 
+    this.prevCluckTimer = game.chicken.cluckTimer;
+    game.chicken.cluckTimer = 999;
+
+    // Freeze the real chicken; we'll render a cinematic actor instead.
+    game.chicken.setController("jetpack", () => true);
     game.chicken.jetpackVisible = true;
-    game.chicken.setController("jetpack", (dt, g, chicken) => {
-      const intro = 0.75;
-      const outro = 1;
 
-      if (this.elapsed < intro) {
-        const t = this.elapsed / intro;
-        chicken.x += (this.baseX - chicken.x) * Math.min(1, dt * 8);
-        chicken.y = this.baseY + Math.sin(this.elapsed * 11.5) * (2 + t * 2);
-        chicken.dir = 1;
-      } else if (this.elapsed < this.duration - outro) {
-        this.phase += dt * 1.5;
-        chicken.x = this.centerX + Math.cos(this.phase * 1.24) * (g.pen.w * 0.31);
-        chicken.y = this.centerY + Math.sin(this.phase * 1.72) * 86;
-        chicken.dir = Math.cos(this.phase * 1.24) >= 0 ? 1 : -1;
-      } else {
-        const settleX = this.baseX;
-        const settleY = this.baseY + Math.sin(this.elapsed * 7) * 1.6;
-        chicken.x += (settleX - chicken.x) * Math.min(1, dt * 4.8);
-        chicken.y += (settleY - chicken.y) * Math.min(1, dt * 5.4);
-        chicken.dir = settleX >= chicken.x ? 1 : -1;
-      }
+    this.actor.x = this.baseX;
+    this.actor.y = this.baseY;
+    this.actor.groundY = game.chicken.groundY;
+    this.actor.dir = this.baseDir;
+    this.actor.rotation = 0;
+    this.actor.alpha = 1;
 
-      if (this.elapsed >= intro - 0.15 && this.elapsed < this.duration - 0.2) {
-        const flameX = chicken.x - chicken.dir * 64;
-        const flameY = chicken.y + 56;
-        this.flames.push({
-          x: flameX + randRange(-8, 8),
-          y: flameY,
-          vx: randRange(-18, 18),
-          vy: randRange(130, 230),
-          life: randRange(0.22, 0.45),
-          size: randRange(6, 14),
-          color: Math.random() > 0.4 ? "#ff9335" : "#ffe571",
-        });
-      }
+    this.overlayAlpha = 0;
+    this.altitude = 0;
+    this.windOn = false;
+    this.parachuteOn = false;
 
-      return true;
-    });
+    this.flames = [];
+    this.plasma = [];
+    this.stars = [];
+    for (let i = 0; i < 70; i += 1) {
+      this.stars.push({
+        x: ((i * 179) % game.world.width) + randRange(-8, 8),
+        y: ((i * 97) % (game.world.height * 0.7)) + randRange(-8, 8),
+        r: 0.7 + ((i * 13) % 4) * 0.35,
+        tw: randRange(0, Math.PI * 2),
+      });
+    }
+
+    // Audio
+    game.sound.jetpackStart();
+    game.sound.jetpackMusicStart();
+    game.sound.jetpackTakeoff();
+    this.lastCue = {
+      takeoff: true,
+      windStart: false,
+      windStop: false,
+      reverse: false,
+      reentry: false,
+      chute: false,
+    };
   }
 
   update(dt, game) {
     super.update(dt, game);
+
+    const t = this.elapsed;
+
+    // Phase timestamps (seconds)
+    const T1 = 0.9; // startup end
+    const T2 = 2.2; // wobble end
+    const T3 = 4.2; // liftoff end
+    const T4 = 6.4; // clouds end
+    const T5 = 7.8; // strato end
+    const T6 = 9.2; // space end
+    const T7 = 9.9; // flip end
+    const T8 = 11.2; // reentry end
+    const T9 = 13.2; // end
+
+    const inRange = (a, b) => t >= a && t < b;
+    const n01 = (a, b) => clamp((t - a) / Math.max(0.0001, b - a), 0, 1);
+
+    // Altitude 0..1
+    if (t < T2) {
+      this.altitude = 0;
+    } else if (t < T5) {
+      this.altitude = easeInOutCubic(n01(T2, T5));
+    } else if (t < T7) {
+      this.altitude = 1;
+    } else if (t < T8) {
+      const tt = easeOutCubic(n01(T7, T8));
+      this.altitude = 1 + (0.45 - 1) * tt;
+    } else {
+      const tt = easeInOutCubic(n01(T8, T9));
+      this.altitude = 0.45 + (0 - 0.45) * tt;
+    }
+
+    // Overlay alpha (when sky/space fully takes over)
+    if (t < T2) {
+      this.overlayAlpha = 0;
+    } else if (t < T3) {
+      this.overlayAlpha = easeInOutCubic(n01(T2, T3));
+    } else if (t < T8 + 0.3) {
+      this.overlayAlpha = 1;
+    } else {
+      this.overlayAlpha = 1 - easeInOutCubic(n01(T8 + 0.3, T9));
+    }
+
+    // Audio cues
+    if (!this.lastCue.windStart && t >= T2) {
+      this.lastCue.windStart = true;
+      game.sound.windStart();
+      this.windOn = true;
+    }
+    if (!this.lastCue.windStop && t >= T5) {
+      this.lastCue.windStop = true;
+      game.sound.windStop();
+      this.windOn = false;
+    }
+    if (!this.lastCue.reverse && t >= T6) {
+      this.lastCue.reverse = true;
+      game.sound.reverseThruster();
+    }
+    if (!this.lastCue.reentry && t >= T7) {
+      this.lastCue.reentry = true;
+      game.sound.reentryFire();
+      game.sound.windStart();
+      this.windOn = true;
+    }
+    if (!this.lastCue.chute && t >= T8) {
+      this.lastCue.chute = true;
+      this.parachuteOn = true;
+      game.sound.parachuteOpen();
+      game.sound.jetpackStop();
+    }
+
+    // Actor motion
+    const baseX = this.baseX;
+    const baseY = this.baseY;
+    const flightY = 320;
+    const spaceY = 260;
+    const reentryEndY = 520;
+
+    let x = baseX;
+    let y = baseY;
+    let rot = this.actor.rotation;
+    let dir = this.actor.dir || 1;
+
+    if (t < T1) {
+      // Startup: small jitter, bob
+      const p = n01(0, T1);
+      const jitter = (1 - p) * 2.5;
+      x = baseX + Math.sin(t * 18) * jitter;
+      y = baseY + Math.sin(t * 11.5) * (2 + p * 3.5);
+      rot = Math.sin(t * 10) * 0.02;
+      dir = this.baseDir;
+    } else if (t < T2) {
+      // Wobble: up a bit, bounce, near-crash, stabilize
+      const p = n01(T1, T2);
+      const wobble = Math.sin(t * 9.2) * (10 + (1 - p) * 14);
+      const dip = Math.sin(p * Math.PI * 2) * 32; // quick dip
+      const climb = easeOutCubic(p) * -70;
+      x = baseX + Math.sin(t * 3.8) * 18;
+      y = baseY + climb + wobble + Math.max(0, dip);
+      rot = Math.sin(t * 5.7) * 0.06;
+      dir = Math.sin(t * 1.7) > 0 ? 1 : -1;
+    } else if (t < T5) {
+      // Liftoff + climb to space
+      const p = n01(T2, T5);
+      const eased = easeInOutCubic(p);
+      const targetY = flightY + (spaceY - flightY) * Math.max(0, (eased - 0.25) / 0.75);
+      x = baseX + Math.sin(t * 1.8) * (22 + eased * 22);
+      y = baseY + (targetY - baseY) * eased + Math.sin(t * 6.5) * (2 + eased * 2);
+      rot = Math.sin(t * 4.2) * 0.03;
+      dir = Math.cos(t * 1.4) >= 0 ? 1 : -1;
+    } else if (t < T6) {
+      // Space float
+      const p = n01(T5, T6);
+      x = baseX + Math.sin(t * 0.9) * 38;
+      y = spaceY + Math.sin(t * 2.2) * 8 + (1 - p) * 6;
+      rot = Math.sin(t * 2.8) * 0.02;
+      dir = Math.cos(t * 0.8) >= 0 ? 1 : -1;
+    } else if (t < T7) {
+      // Flip for reentry
+      const p = easeInOutCubic(n01(T6, T7));
+      x = baseX + Math.sin(t * 1.1) * 26;
+      y = spaceY + Math.sin(t * 2.0) * 6;
+      rot = p * Math.PI;
+      dir = Math.cos(t * 0.8) >= 0 ? 1 : -1;
+    } else if (t < T8) {
+      // Reentry drop
+      const p = easeInCubic(n01(T7, T8));
+      x = baseX + Math.sin(t * 3.6) * 18;
+      y = spaceY + (reentryEndY - spaceY) * p;
+      rot = Math.PI + Math.sin(t * 5) * 0.03;
+      dir = 1;
+    } else {
+      // Parachute descent
+      const p = easeInOutCubic(n01(T8, T9));
+      x = baseX + Math.sin(t * 1.2) * 32;
+      y = reentryEndY + (baseY - reentryEndY) * p + Math.sin(t * 2.5) * 6;
+      // Ease rotation back upright quickly
+      const rP = easeOutCubic(n01(T8, Math.min(T9, T8 + 0.25)));
+      rot = Math.PI + (0 - Math.PI) * rP + Math.sin(t * 1.8) * 0.01;
+      dir = 1;
+    }
+
+    this.actor.x = x;
+    this.actor.y = y;
+    this.actor.dir = dir;
+    this.actor.rotation = rot;
+
+    // Flame particles (no flames after chute)
+    const jetsOn = t < T8;
+    if (jetsOn && (t > 0.35 || t < T1) && Math.random() < dt * 60) {
+      // Reverse thrust during flip phase.
+      const reverse = inRange(T6, T7);
+      const side = reverse ? -dir : dir;
+      const flameX = x - side * 64;
+      const flameY = y + 56;
+      const vy = reverse ? randRange(-210, -120) : randRange(130, 230);
+      this.flames.push({
+        x: flameX + randRange(-8, 8),
+        y: flameY,
+        vx: randRange(-22, 22),
+        vy,
+        life: randRange(0.18, 0.42),
+        size: randRange(6, 14),
+        color: Math.random() > 0.4 ? "#ff9335" : "#ffe571",
+      });
+    }
+
+    // Plasma particles during reentry
+    if (inRange(T7, T8) && Math.random() < dt * 120) {
+      this.plasma.push({
+        x: x + randRange(-18, 18),
+        y: y + randRange(-18, 18),
+        vx: randRange(-40, 40),
+        vy: randRange(-30, 60),
+        life: randRange(0.18, 0.45),
+        size: randRange(10, 26),
+        hue: randInt(16, 42),
+      });
+      if (this.plasma.length > 140) this.plasma.splice(0, this.plasma.length - 140);
+    }
+
     updateParticles(this.flames, dt, 190);
+    updateParticles(this.plasma, dt, 30);
   }
 
-  drawFront(ctx, game) {
+  shouldSuppressTapBursts() {
+    return true;
+  }
+
+  drawJetpackChicken(ctx, game, { alpha = 1, inOverlay = false } = {}) {
     const chickenJetpack = game.assets.get("chickenJetpack");
-    const chicken = game.chicken;
+    const a = this.actor;
 
-    drawSprite(ctx, chickenJetpack, chicken.x, chicken.y - 22, 254, 254, {
-      flipX: chicken.dir < 0,
-      rotation: Math.sin(this.elapsed * 8) * 0.025,
-    });
+    const w = 254;
+    const h = 254;
+    const drawX = a.x;
+    const drawY = a.y - 22;
 
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(drawX, drawY);
+    ctx.rotate(a.rotation);
+    ctx.scale(a.dir < 0 ? -1 : 1, 1);
+    ctx.drawImage(chickenJetpack, -w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    // Flames and plasma are additive; render on top.
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     for (const flame of this.flames) {
@@ -507,13 +743,137 @@ class JetpackAction extends GameAction {
       ctx.ellipse(flame.x, flame.y, flame.size * 0.65, flame.size, 0, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    if (inOverlay) {
+      for (const p of this.plasma) {
+        const alpha = Math.max(0, Math.min(1, p.life * 2.4));
+        ctx.globalAlpha = alpha;
+        const g = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.size);
+        g.addColorStop(0, "rgba(255,255,255,1)");
+        g.addColorStop(0.25, `hsla(${p.hue}, 98%, 62%, 1)`);
+        g.addColorStop(1, "rgba(255, 70, 10, 0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  drawParachute(ctx, game, alpha = 1) {
+    const parachute = game.assets.get("parachute");
+    const a = this.actor;
+    const sway = Math.sin(this.elapsed * 2.2) * 10;
+
+    const openT = clamp((this.elapsed - 11.2) / 0.25, 0, 1);
+    const pop = easeOutCubic(openT);
+
+    const canopyX = a.x + sway * 0.4;
+    const canopyY = a.y - 192 - pop * 8;
+    const w = 260 * (0.6 + pop * 0.4);
+    const h = 260 * (0.6 + pop * 0.4);
+
+    drawSprite(ctx, parachute, canopyX, canopyY, w, h, { alpha });
+
+    // Strings.
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = "rgba(20, 22, 28, 0.62)";
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    const attachY = canopyY + h * 0.28;
+    const leftX = canopyX - w * 0.33;
+    const rightX = canopyX + w * 0.33;
+    const midX = canopyX;
+    const targetX = a.x;
+    const targetY = a.y - 34;
+    for (const sx of [leftX, midX, rightX]) {
+      ctx.beginPath();
+      ctx.moveTo(sx, attachY);
+      ctx.quadraticCurveTo((sx + targetX) * 0.5, (attachY + targetY) * 0.5 + 24, targetX, targetY);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawOverlayBackdrop(ctx, game) {
+    const col = game.assets.get("jetpackSkyColumn");
+    const scale = game.world.width / col.width;
+    const srcH = game.world.height / scale;
+    const maxSrcY = Math.max(0, col.height - srcH);
+    const srcY = (1 - this.altitude) * maxSrcY;
+
+    ctx.drawImage(col, 0, srcY, col.width, srcH, 0, 0, game.world.width, game.world.height);
+  }
+
+  drawFront(ctx, game) {
+    // Before overlay takes over, draw in-world so the chicken feels in the pen.
+    if (this.overlayAlpha > 0.6) return;
+    this.drawJetpackChicken(ctx, game, { alpha: 1, inOverlay: false });
+  }
+
+  drawOverlay(ctx, game) {
+    if (this.overlayAlpha <= 0.001) return;
+
+    ctx.save();
+    ctx.globalAlpha = clamp(this.overlayAlpha, 0, 1);
+    this.drawOverlayBackdrop(ctx, game);
+
+    // Add a few extra stars in space for sparkle.
+    if (this.altitude > 0.72) {
+      const starAlpha = clamp((this.altitude - 0.72) / 0.28, 0, 1) * 0.7;
+      ctx.fillStyle = `rgba(255,255,230,${starAlpha})`;
+      for (const s of this.stars) {
+        const tw = (Math.sin(this.elapsed * 2.6 + s.tw) + 1) * 0.5;
+        const r = s.r + tw * 0.55;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Reentry plasma ball (core)
+    if (this.elapsed >= 9.9 && this.elapsed < 11.2) {
+      const a = this.actor;
+      const core = ctx.createRadialGradient(a.x, a.y - 18, 6, a.x, a.y - 18, 160);
+      core.addColorStop(0, "rgba(255,255,255,0.95)");
+      core.addColorStop(0.22, "rgba(255, 245, 210, 0.62)");
+      core.addColorStop(0.55, "rgba(255, 120, 40, 0.35)");
+      core.addColorStop(1, "rgba(255, 60, 10, 0)");
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = core;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y - 18, 160, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Chicken + FX
+    this.drawJetpackChicken(ctx, game, { alpha: 1, inOverlay: true });
+
+    if (this.parachuteOn) {
+      this.drawParachute(ctx, game, 1);
+    }
+
     ctx.restore();
   }
 
   onFinish(game) {
     game.chicken.jetpackVisible = false;
     game.chicken.clearController("jetpack");
+    game.chicken.cluckTimer = this.prevCluckTimer || 0;
+
     game.sound.jetpackStop();
+    game.sound.windStop();
+    game.sound.jetpackMusicStop();
+
+    // Keep the chicken where it started (stable, predictable).
+    game.chicken.u = this.baseU;
+    game.chicken.v = this.baseV;
+    game.chicken.projectFromUV();
+    game.chicken.y = game.chicken.groundY;
   }
 
   shouldHideChicken() {
@@ -525,122 +885,155 @@ class JetpackAction extends GameAction {
   }
 
   getCinematicCue(game) {
+    const reentry = this.elapsed >= 9.9 && this.elapsed < 11.2;
+    const space = this.altitude > 0.7;
+    const vignette = space ? 0.34 : 0.18 + this.overlayAlpha * 0.1;
     return {
       priority: 8,
-      focusX: game.chicken.x,
-      focusY: game.chicken.y - 22,
-      zoom: 1.08,
-      vignette: 0.2,
-      nightBlend: 0.08,
-      ambienceDuck: 0.24,
+      focusX: this.actor.x,
+      focusY: this.actor.y - 30,
+      zoom: reentry ? 1.16 : 1.1,
+      vignette,
+      nightBlend: 0,
+      ambienceDuck: reentry ? 0.55 : 0.35,
     };
   }
 }
 
-class PottyDropAction extends GameAction {
+class OuthousePottyAction extends GameAction {
   constructor() {
-    super({ id: "potty", duration: 10, major: true });
-    this.state = "roll-in";
-    this.stateTime = 0;
-    this.entrySide = 1;
-    this.pottyX = 0;
-    this.pottyTargetX = 0;
-    this.pottyY = 0;
-    this.landY = 0;
-    this.dropVY = 0;
+    // Keep it long enough for storyboarding tools to capture the full beat.
+    super({ id: "potty", duration: 11.6, major: true });
 
+    this.state = "approach";
+    this.stateTime = 0;
+
+    this.stage = "exterior"; // "exterior" | "interior"
+    this.fade = 0; // 0..1 black overlay
+    this.light = 0; // 0..1 interior light blend
+
+    this.prevCluckTimer = 0;
+
+    this.actor = {
+      u: 0.5,
+      v: 0.76,
+      x: 800,
+      y: 650,
+      groundY: 650,
+      visualScale: 1,
+      dir: 1,
+      alpha: 1,
+      poseScale: 1,
+      swing: 0,
+    };
+
+    this.outhouse = {
+      u: 0.3,
+      v: 0.35,
+      doorOpen: false,
+    };
+
+    // Interior staging coordinates (tuned to a 1600x900 background).
+    this.interior = {
+      groundY: 740,
+      doorX: 420,
+      switchX: 500,
+      switchY: 520,
+      pottyX: 1020,
+      pottyY: 720,
+      hopEndX: 1200,
+    };
+
+    // Potty contents / flush
     this.waterTint = 0;
     this.contentsAlpha = 0.95;
     this.whirlpool = 0;
     this.strainPulse = 0;
     this.lockedDirtyTint = 0;
-
     this.swirls = [];
-    this.rewards = [];
     this.faceSteam = [];
-
-    this.hopDuration = 0.95;
-    this.hopStartX = 0;
-    this.hopEndX = 0;
-    this.hopGroundY = 0;
-
     this.blobs = [
       { x: -11, y: 1, r: 3.4 },
       { x: 7, y: 2, r: 4.3 },
       { x: 15, y: -2, r: 2.6 },
       { x: -2, y: -3, r: 2.8 },
     ];
+
+    // Hop arc
+    this.hopStartX = 0;
+    this.hopStartY = 0;
+    this.hopEndX = 0;
+    this.hopDuration = 0.9;
   }
 
   start(game) {
-    const center = game.pen.x + game.pen.w / 2;
-    this.entrySide = game.chicken.x < center ? -1 : 1;
+    this.state = "approach";
+    this.stateTime = 0;
+    this.elapsed = 0;
+    this.stage = "exterior";
+    this.fade = 0;
+    this.light = 0;
 
-    // Keep the potty hero beat in the middle of the paddock instead of near the front fence.
-    const targetPoint = game.penSpace.toScreen(0.5 + randRange(-0.04, 0.04), 0.5 + randRange(-0.04, 0.04));
-    this.pottyTargetX = clamp(targetPoint.x, game.pen.x + 230, game.pen.x + game.pen.w - 230);
-    this.landY = targetPoint.y - 48;
-    this.pottyY = game.pen.y - 250;
-    this.pottyX = this.pottyTargetX;
-    this.dropVY = 0;
+    this.prevCluckTimer = game.chicken.cluckTimer;
+    game.chicken.cluckTimer = 999;
 
+    // Freeze the real chicken (we'll draw a cinematic actor instead).
+    game.chicken.setController("potty", () => true);
+
+    // Initialize actor from current chicken UV.
+    this.actor.u = game.chicken.u;
+    this.actor.v = game.chicken.v;
+    const projected = game.penSpace.toScreen(this.actor.u, this.actor.v);
+    this.actor.x = projected.x;
+    this.actor.groundY = projected.y;
+    this.actor.y = this.actor.groundY;
+    this.actor.visualScale = game.penSpace.depthScale(this.actor.v);
+    this.actor.alpha = 1;
+    this.actor.poseScale = 1;
+
+    // Outhouse anchor (should match Game.js prop).
+    this.outhouse.u = game.outhouse?.u ?? 0.3;
+    this.outhouse.v = game.outhouse?.v ?? 0.35;
+    this.outhouse.doorOpen = false;
+    if (game.outhouse) game.outhouse.doorOpen = false;
+
+    // Reset potty contents.
     this.waterTint = 0;
     this.contentsAlpha = 0.95;
     this.whirlpool = 0;
     this.strainPulse = 0;
     this.lockedDirtyTint = 0;
     this.swirls = [];
-    this.rewards = [];
     this.faceSteam = [];
-    game.chicken.poseScale = 1;
+  }
 
-    game.chicken.setController("potty", (dt, g, chicken) => {
-      if (this.state === "roll-in") {
-        const watchX = clamp(this.pottyTargetX - this.entrySide * 76, g.pen.x + 98, g.pen.x + g.pen.w - 98);
-        chicken.x += (watchX - chicken.x) * Math.min(1, dt * 2.2);
-        chicken.dir = this.pottyX > chicken.x ? 1 : -1;
-        chicken.poseScale = 1;
-        chicken.y = chicken.groundY + Math.sin(this.elapsed * 8.5) * 2;
-      } else if (this.state === "walk") {
-        const delta = this.pottyTargetX + 8 - chicken.x;
-        chicken.x += Math.sign(delta) * Math.min(Math.abs(delta), dt * 185);
-        chicken.dir = delta >= 0 ? 1 : -1;
-        chicken.poseScale = 1;
-        chicken.y = chicken.groundY + Math.sin(this.elapsed * 11.2) * 2.1;
-      } else if (this.state === "sit" || this.state === "strain") {
-        const seatX = this.pottyTargetX + 6;
-        chicken.x += (seatX - chicken.x) * Math.min(1, dt * 9.2);
-        chicken.dir = 1;
-        chicken.poseScale = 0.96;
-        const tension = this.state === "strain" ? Math.sin(this.strainPulse) * 2.4 : Math.sin(this.elapsed * 10.7) * 1;
-        chicken.y = this.pottyY - 26 + tension;
-      } else if (this.state === "hop") {
-        const t = Math.min(1, this.stateTime / this.hopDuration);
-        const eased = easeOutCubic(t);
-        chicken.poseScale = 1;
-        chicken.dir = 1;
-        chicken.x = this.hopStartX + (this.hopEndX - this.hopStartX) * eased;
-        chicken.y = this.hopGroundY + 6 - Math.sin(Math.PI * t) * 66;
-      } else if (this.state === "reveal" || this.state === "flush" || this.state === "done") {
-        chicken.poseScale = 1;
-        chicken.dir = -1;
-        chicken.x += (this.hopEndX - chicken.x) * Math.min(1, dt * 7.5);
-        chicken.y = chicken.groundY + Math.sin(this.elapsed * 10) * 2;
-      } else {
-        chicken.poseScale = 1;
-        chicken.x += (this.pottyTargetX - chicken.x) * Math.min(1, dt * 1.8);
-        chicken.y = chicken.groundY + Math.sin(this.elapsed * 8) * 3;
-      }
-      return true;
-    });
+  shouldHideChicken() {
+    return true;
+  }
+
+  shouldHideCompanions() {
+    return true;
+  }
+
+  shouldSuppressTapBursts() {
+    return true;
   }
 
   setState(next, game) {
     this.state = next;
     this.stateTime = 0;
 
-    if (next === "walk") {
-      game.sound.boing();
+    if (next === "door-open") {
+      this.outhouse.doorOpen = true;
+      if (game.outhouse) game.outhouse.doorOpen = true;
+      game.sound.doorCreakOpen();
+    }
+
+    if (next === "light-on") {
+      game.sound.lightSwitch();
+    }
+    if (next === "light-off") {
+      game.sound.lightSwitch();
     }
     if (next === "sit") {
       game.sound.sparkle();
@@ -653,9 +1046,9 @@ class PottyDropAction extends GameAction {
       this.waterTint = Math.max(this.waterTint, 0.96);
       this.lockedDirtyTint = this.waterTint;
       this.contentsAlpha = 1;
-      this.hopStartX = game.chicken.x;
-      this.hopGroundY = game.chicken.groundY;
-      this.hopEndX = clamp(this.pottyTargetX + 156, game.pen.x + 106, game.pen.x + game.pen.w - 94);
+      this.hopStartX = this.actor.x;
+      this.hopStartY = this.actor.groundY;
+      this.hopEndX = this.interior.hopEndX;
     }
     if (next === "reveal") {
       game.sound.bubblePop();
@@ -671,21 +1064,36 @@ class PottyDropAction extends GameAction {
         });
       }
     }
-    if (next === "done") {
-      game.sound.sparkle();
-      for (let i = 0; i < 18; i += 1) {
-        this.rewards.push({
-          x: this.pottyTargetX + randRange(-28, 28),
-          y: this.landY - randRange(24, 56),
-          vx: randRange(-120, 120),
-          vy: randRange(-250, -120),
-          life: randRange(0.7, 1.3),
-          size: randRange(8, 15),
-          shape: Math.random() > 0.42 ? "heart" : "star",
-          color: Math.random() > 0.5 ? "#ff9abf" : "#ffd86b",
-        });
-      }
-    }
+  }
+
+  exteriorDoorTarget(game) {
+    // Target point slightly in front of the outhouse so it feels "inside the pen".
+    const u = clamp(this.outhouse.u - 0.02, 0.08, 0.92);
+    const v = clamp(this.outhouse.v + 0.12, 0.14, 0.92);
+    const p = game.penSpace.toScreen(u, v);
+    return { u, v, x: p.x, y: p.y };
+  }
+
+  updateExteriorActor(dt, game, targetU, targetV, speed = 4.2) {
+    // Move in pen-space so depth scaling stays coherent.
+    this.actor.u += (targetU - this.actor.u) * Math.min(1, dt * speed);
+    this.actor.v += (targetV - this.actor.v) * Math.min(1, dt * speed);
+    const p = game.penSpace.toScreen(this.actor.u, this.actor.v);
+    const prevX = this.actor.x;
+    this.actor.x = p.x;
+    this.actor.groundY = p.y;
+    this.actor.visualScale = game.penSpace.depthScale(this.actor.v);
+    this.actor.dir = this.actor.x >= prevX ? 1 : -1;
+    this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.2) * 2.2;
+  }
+
+  updateInteriorActor(dt, targetX, groundY, speed = 4.2) {
+    const prevX = this.actor.x;
+    this.actor.x += (targetX - this.actor.x) * Math.min(1, dt * speed);
+    this.actor.groundY += (groundY - this.actor.groundY) * Math.min(1, dt * 6.0);
+    this.actor.visualScale += (1.02 - this.actor.visualScale) * Math.min(1, dt * 3.0);
+    this.actor.dir = this.actor.x >= prevX ? 1 : -1;
+    this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 11.2) * 2.1;
   }
 
   update(dt, game) {
@@ -693,77 +1101,179 @@ class PottyDropAction extends GameAction {
     this.stateTime += dt;
     this.strainPulse += dt * 10;
 
-    if (this.state === "roll-in") {
-      this.dropVY += 1240 * dt;
-      this.pottyY += this.dropVY * dt;
-      if (this.pottyY >= this.landY) {
-        this.pottyY = this.landY;
-        if (this.dropVY > 220) {
-          this.dropVY *= -0.28;
-          game.sound.boing();
-        } else {
-          this.dropVY = 0;
-          this.setState("walk", game);
+    const d = {
+      approach: 1.35,
+      doorOpen: 0.35,
+      enter: 0.25,
+      cutIn: 0.2,
+      cutInReveal: 0.2,
+      lightOn: 0.6,
+      walkToPotty: 0.6,
+      sit: 0.4,
+      strain: 1.35,
+      hop: this.hopDuration,
+      reveal: 0.6,
+      zoomIn: 0.35,
+      flush: 1.2,
+      zoomOut: 0.45,
+      lightOff: 0.6,
+      walkToDoor: 0.5,
+      cutOut: 0.2,
+      cutOutReveal: 0.2,
+      exit: 0.85,
+      done: 0.45,
+    };
+
+    if (this.stage === "exterior") {
+      const door = this.exteriorDoorTarget(game);
+      if (this.state === "approach") {
+        this.updateExteriorActor(dt, game, door.u, door.v, 3.6);
+        if (this.stateTime >= d.approach) this.setState("door-open", game);
+      } else if (this.state === "door-open") {
+        this.updateExteriorActor(dt, game, door.u, door.v, 6.5);
+        if (this.stateTime >= d.doorOpen) this.setState("enter", game);
+      } else if (this.state === "enter") {
+        // Step "into" the outhouse and fade out.
+        const t = Math.min(1, this.stateTime / d.enter);
+        this.updateExteriorActor(dt, game, door.u + 0.005, clamp(door.v - 0.06, 0.14, 0.92), 7.2);
+        const eased = easeOutCubic(t);
+        this.actor.alpha = t > 0.75 ? 0 : 1 - eased;
+        if (this.stateTime >= d.enter) this.setState("cut-in", game);
+      } else if (this.state === "cut-in") {
+        this.fade = Math.min(1, this.stateTime / d.cutIn);
+        if (this.stateTime >= d.cutIn) {
+          // Switch to interior while fully black.
+          this.stage = "interior";
+          this.actor.alpha = 1;
+          this.actor.visualScale = 1.02;
+          this.actor.groundY = this.interior.groundY;
+          this.actor.y = this.interior.groundY;
+          this.actor.x = this.interior.doorX;
+          this.actor.dir = 1;
+          this.setState("cut-in-reveal", game);
         }
-      }
-      if (this.stateTime > 1.7) {
-        this.pottyY = this.landY;
-        this.setState("walk", game);
-      }
-    }
-
-    if (this.state === "walk") {
-      if (Math.abs(game.chicken.x - (this.pottyTargetX + 8)) < 10 || this.stateTime > 1.2) {
-        this.setState("sit", game);
+      } else if (this.state === "cut-out-reveal") {
+        // Not used on exterior; handled in interior.
+      } else if (this.state === "exit") {
+        // Not used on exterior; handled in interior.
       }
     }
 
-    if (this.state === "sit" && this.stateTime >= 0.5) {
-      this.setState("strain", game);
-    }
+    if (this.stage === "interior") {
+      if (this.state === "cut-in-reveal") {
+        this.fade = 1 - Math.min(1, this.stateTime / d.cutInReveal);
+        if (this.stateTime >= d.cutInReveal) this.setState("light-on", game);
+      } else if (this.state === "light-on") {
+        const t = Math.min(1, this.stateTime / d.lightOn);
+        this.updateInteriorActor(dt, this.interior.switchX, this.interior.groundY, 6.5);
+        this.light = t;
+        if (this.stateTime >= d.lightOn) this.setState("walk-to-potty", game);
+      } else if (this.state === "walk-to-potty") {
+        this.updateInteriorActor(dt, this.interior.pottyX - 10, this.interior.groundY, 4.8);
+        if (this.stateTime >= d.walkToPotty) this.setState("sit", game);
+      } else if (this.state === "sit") {
+        this.updateInteriorActor(dt, this.interior.pottyX - 10, this.interior.groundY, 9.2);
+        if (this.stateTime >= d.sit) this.setState("strain", game);
+      } else if (this.state === "strain") {
+        // Dirty while seated; keep invariant for storyboards.
+        this.waterTint = Math.min(1, this.stateTime / 1.15);
+        this.updateInteriorActor(dt, this.interior.pottyX - 10, this.interior.groundY, 12);
 
-    if (this.state === "strain") {
-      // The potty gets dirty while seated, so it is already dirty the instant the chicken hops off.
-      this.waterTint = Math.min(1, this.stateTime / 1.15);
+        if (Math.random() < dt * 9) {
+          this.faceSteam.push({
+            x: this.interior.pottyX - 6 + randRange(2, 20),
+            y: this.interior.pottyY - 92 + randRange(-3, 3),
+            vx: randRange(-5, 10),
+            vy: randRange(-28, -16),
+            life: randRange(0.35, 0.6),
+            size: randRange(5, 10),
+          });
+        }
 
-      if (Math.random() < dt * 9) {
-        this.faceSteam.push({
-          x: game.chicken.x + randRange(2, 20),
-          y: game.chicken.y - 60 + randRange(-3, 3),
-          vx: randRange(-5, 10),
-          vy: randRange(-28, -16),
-          life: randRange(0.35, 0.6),
-          size: randRange(5, 10),
-        });
+        if (this.stateTime >= d.strain) this.setState("hop", game);
+      } else if (this.state === "hop") {
+        const t = Math.min(1, this.stateTime / this.hopDuration);
+        const eased = easeOutCubic(t);
+        this.actor.poseScale = 1;
+        this.actor.dir = 1;
+        this.actor.x = this.hopStartX + (this.hopEndX - this.hopStartX) * eased;
+        this.actor.groundY = this.interior.groundY;
+        this.actor.y = this.hopStartY + 6 - Math.sin(Math.PI * t) * 66;
+        if (this.stateTime >= this.hopDuration) this.setState("reveal", game);
+      } else if (this.state === "reveal") {
+        this.contentsAlpha = 1;
+        this.waterTint = this.lockedDirtyTint;
+        this.updateInteriorActor(dt, this.interior.hopEndX, this.interior.groundY, 7.5);
+        if (this.stateTime >= d.reveal) this.setState("zoom-in", game);
+      } else if (this.state === "zoom-in") {
+        this.updateInteriorActor(dt, this.interior.hopEndX, this.interior.groundY, 7.5);
+        if (this.stateTime >= d.zoomIn) this.setState("flush", game);
+      } else if (this.state === "flush") {
+        this.whirlpool = Math.min(1, this.stateTime / 1.2);
+        this.contentsAlpha = Math.max(0, 1 - this.whirlpool * 1.15);
+        if (this.stateTime >= d.flush) this.setState("zoom-out", game);
+      } else if (this.state === "zoom-out") {
+        if (this.stateTime >= d.zoomOut) this.setState("light-off", game);
+      } else if (this.state === "light-off") {
+        const t = Math.min(1, this.stateTime / d.lightOff);
+        this.updateInteriorActor(dt, this.interior.switchX, this.interior.groundY, 6.5);
+        this.light = Math.max(0, 1 - t);
+        if (this.stateTime >= d.lightOff) this.setState("walk-to-door", game);
+      } else if (this.state === "walk-to-door") {
+        this.updateInteriorActor(dt, this.interior.doorX, this.interior.groundY, 5.8);
+        if (this.stateTime >= d.walkToDoor) this.setState("cut-out", game);
+      } else if (this.state === "cut-out") {
+        this.fade = Math.min(1, this.stateTime / d.cutOut);
+        if (this.stateTime >= d.cutOut) {
+          // Switch to exterior while fully black.
+          this.stage = "exterior";
+          this.fade = 1;
+
+          const door = this.exteriorDoorTarget(game);
+          this.actor.u = door.u + 0.005;
+          this.actor.v = clamp(door.v - 0.06, 0.14, 0.92);
+          const p = game.penSpace.toScreen(this.actor.u, this.actor.v);
+          this.actor.x = p.x;
+          this.actor.groundY = p.y;
+          this.actor.visualScale = game.penSpace.depthScale(this.actor.v);
+          this.actor.y = this.actor.groundY;
+          this.actor.dir = 1;
+          this.actor.alpha = 0;
+
+          this.setState("cut-out-reveal", game);
+        }
+      } else if (this.state === "cut-out-reveal") {
+        this.fade = 1 - Math.min(1, this.stateTime / d.cutOutReveal);
+        if (this.stateTime >= d.cutOutReveal) this.setState("exit", game);
       }
+    }
 
-      if (this.stateTime >= 1.35) {
-        this.setState("hop", game);
+    if (this.stage === "exterior") {
+      const door = this.exteriorDoorTarget(game);
+      if (this.state === "cut-out-reveal") {
+        this.fade = 1 - Math.min(1, this.stateTime / d.cutOutReveal);
+        if (this.stateTime >= d.cutOutReveal) this.setState("exit", game);
+      } else if (this.state === "exit") {
+        // Fade actor back in and step outward.
+        // Avoid translucent "ghosting" at the doorway; snap visible once the beat starts.
+        this.actor.alpha = this.stateTime < 0.24 ? 0 : 1;
+        this.updateExteriorActor(dt, game, door.u, clamp(door.v + 0.05, 0.14, 0.92), 5.8);
+
+        const tDoor = Math.min(1, this.stateTime / d.exit);
+        if (tDoor > 0.65 && this.outhouse.doorOpen) {
+          this.outhouse.doorOpen = false;
+          if (game.outhouse) game.outhouse.doorOpen = false;
+          game.sound.doorCreakClose();
+        }
+
+        if (this.stateTime >= d.exit) this.setState("done", game);
+      } else if (this.state === "done") {
+        if (this.stateTime >= 0.12 && this.outhouse.doorOpen) {
+          this.outhouse.doorOpen = false;
+          if (game.outhouse) game.outhouse.doorOpen = false;
+        }
+        if (this.stateTime >= d.done) this.finish(game);
       }
-    }
-
-    if (this.state === "hop" && this.stateTime >= this.hopDuration) {
-      this.setState("reveal", game);
-    }
-
-    if (this.state === "reveal") {
-      this.contentsAlpha = 1;
-      this.waterTint = this.lockedDirtyTint;
-      if (this.stateTime >= 0.95) {
-        this.setState("flush", game);
-      }
-    }
-
-    if (this.state === "flush") {
-      this.whirlpool = Math.min(1, this.stateTime / 1.2);
-      this.contentsAlpha = Math.max(0, 1 - this.whirlpool * 1.15);
-      if (this.stateTime >= 1.2) {
-        this.setState("done", game);
-      }
-    }
-
-    if (this.state === "done" && this.stateTime >= 0.6) {
-      this.finish(game);
     }
 
     for (const swirl of this.swirls) {
@@ -771,25 +1281,52 @@ class PottyDropAction extends GameAction {
       swirl.life -= dt;
     }
     for (let i = this.swirls.length - 1; i >= 0; i -= 1) {
-      if (this.swirls[i].life <= 0) {
-        this.swirls.splice(i, 1);
-      }
+      if (this.swirls[i].life <= 0) this.swirls.splice(i, 1);
     }
 
     updateParticles(this.faceSteam, dt, -8);
-    updateParticles(this.rewards, dt, 320);
-
-    if (this.elapsed > this.duration) {
-      this.finish(game);
-    }
   }
 
-  drawPottyContents(ctx) {
+  drawChickenActor(ctx, chickenSprite, opts = {}) {
+    // Small alpha values can read as a "ghost" during cuts. Snap to fully hidden.
+    if ((this.actor.alpha || 0) < 0.08) return;
+
+    const extraScale = typeof opts.scale === "number" ? opts.scale : 1;
+    const skipShadow = !!opts.skipShadow;
+    const extraYOffset = typeof opts.yOffset === "number" ? opts.yOffset : 0;
+
+    const size = 224 * this.actor.visualScale * this.actor.poseScale * extraScale;
+    const drawX = this.actor.x;
+    const drawY = this.actor.y - 62 * this.actor.visualScale + extraYOffset * this.actor.visualScale;
+    const shadowW = 66 * this.actor.visualScale;
+    const shadowH = 17 * this.actor.visualScale;
+
+    ctx.save();
+    ctx.globalAlpha = this.actor.alpha;
+    ctx.translate(drawX, drawY);
+
+    if (!skipShadow) {
+      ctx.fillStyle = "rgba(0,0,0,0.16)";
+      ctx.beginPath();
+      ctx.ellipse(0, 106 * this.actor.visualScale, shadowW, shadowH, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const swing = Math.sin(this.elapsed * (8.8 + this.actor.visualScale * 2.2)) * 0.05;
+    const baseRotation = typeof opts.rotation === "number" ? opts.rotation : 0;
+    const swingScale = typeof opts.swingScale === "number" ? opts.swingScale : 1;
+    ctx.rotate(baseRotation + swing * swingScale * this.actor.dir);
+    ctx.scale(this.actor.dir, 1);
+    ctx.drawImage(chickenSprite, -size / 2, -size / 2, size, size);
+    ctx.restore();
+  }
+
+  drawPottyContents(ctx, pottyX, pottyY, scale = 1) {
     // Tuned to the open-bowl `potty` sprite so contents sit in the basin.
-    const cx = this.pottyX - 7;
-    const cy = this.pottyY - 11;
-    const rx = 31;
-    const ry = 11;
+    const cx = pottyX + (-7) * scale;
+    const cy = pottyY + (-11) * scale;
+    const rx = 31 * scale;
+    const ry = 11 * scale;
 
     ctx.save();
     ctx.beginPath();
@@ -800,23 +1337,31 @@ class PottyDropAction extends GameAction {
     const g = Math.round(206 + (205 - 206) * this.waterTint);
     const b = Math.round(255 + (86 - 255) * this.waterTint);
     ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.86 * this.contentsAlpha})`;
-    ctx.fillRect(cx - rx - 3, cy - ry - 4, rx * 2 + 6, ry * 2 + 8);
+    ctx.fillRect(cx - rx - 3 * scale, cy - ry - 4 * scale, rx * 2 + 6 * scale, ry * 2 + 8 * scale);
 
     if (this.waterTint > 0.45) {
       const blobAlpha = Math.min(0.65, ((this.waterTint - 0.45) / 0.55) * this.contentsAlpha);
       ctx.fillStyle = `rgba(150, 106, 72, ${blobAlpha})`;
       for (const blob of this.blobs) {
         ctx.beginPath();
-        ctx.ellipse(cx + blob.x, cy + blob.y, blob.r, blob.r * 0.75, 0, 0, Math.PI * 2);
+        ctx.ellipse(
+          cx + blob.x * scale,
+          cy + blob.y * scale,
+          blob.r * scale,
+          blob.r * 0.75 * scale,
+          0,
+          0,
+          Math.PI * 2,
+        );
         ctx.fill();
       }
     }
 
     if (this.whirlpool > 0) {
       ctx.strokeStyle = `rgba(255,255,255,${0.58 * this.contentsAlpha})`;
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = 1.8 * scale;
       for (let i = 0; i < 3; i += 1) {
-        const rr = 4 + i * 5 + this.whirlpool * 2;
+        const rr = (4 + i * 5 + this.whirlpool * 2) * scale;
         ctx.beginPath();
         ctx.arc(cx, cy, rr, this.elapsed * 6 + i * 0.8, this.elapsed * 6 + i * 0.8 + Math.PI * 1.35);
         ctx.stroke();
@@ -824,145 +1369,161 @@ class PottyDropAction extends GameAction {
 
       ctx.fillStyle = `rgba(245, 246, 250, ${0.62 * this.whirlpool * this.contentsAlpha})`;
       ctx.beginPath();
-      ctx.arc(cx, cy, 2 + this.whirlpool * 3.5, 0, Math.PI * 2);
+      ctx.arc(cx, cy, (2 + this.whirlpool * 3.5) * scale, 0, Math.PI * 2);
       ctx.fill();
     }
 
     ctx.restore();
 
     ctx.strokeStyle = "rgba(120, 130, 148, 0.68)";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * scale;
     ctx.beginPath();
     ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
 
   drawFront(ctx, game) {
-    const potty = game.assets.get("potty");
-    const pottySit = game.assets.get("pottySit");
-    const pottyStrain = game.assets.get("pottyStrain");
+    // Exterior actor only; interior draws in drawOverlay so it can fully cover the world.
+    if (this.stage !== "exterior") return;
 
-    if (this.state === "roll-in") {
-      ctx.strokeStyle = "rgba(255,255,255,0.42)";
-      ctx.lineWidth = 4;
-      for (let i = -1; i <= 1; i += 1) {
-        const x = this.pottyX + i * 26;
+    const chickenSprite = game.assets.get("chicken");
+    if (this.actor.alpha > 0.01) this.drawChickenActor(ctx, chickenSprite);
+  }
+
+	  drawOverlay(ctx, game) {
+	    if (this.stage === "interior") {
+	      const off = game.assets.get("outhouseInteriorOff");
+	      const on = game.assets.get("outhouseInteriorOn");
+
+      ctx.drawImage(off, 0, 0, game.world.width, game.world.height);
+      if (this.light > 0.001) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, this.light));
+        ctx.drawImage(on, 0, 0, game.world.width, game.world.height);
+        ctx.restore();
+      }
+
+	      const potty = game.assets.get("potty");
+	      const chickenSprite = game.assets.get("chicken");
+
+	      // Slight warm light pool under the potty for readability.
+	      if (this.state === "sit" || this.state === "strain" || this.state === "reveal" || this.state === "zoom-in" || this.state === "flush") {
+	        ctx.fillStyle = `rgba(255, 243, 189, ${0.18 + this.light * 0.32})`;
+	        ctx.beginPath();
+        ctx.ellipse(this.interior.pottyX + 4, this.interior.pottyY - 14, 44, 16, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = "rgba(72, 80, 92, 0.2)";
+	      ctx.beginPath();
+	      ctx.ellipse(this.interior.pottyX + 2, this.interior.pottyY + 48, 72, 18, 0, 0, Math.PI * 2);
+	      ctx.fill();
+
+	      const seatedPose = this.state === "sit";
+	      const strainPose = this.state === "strain";
+	      const poseSprite = potty;
+	      // Keep potty size consistent across all beats; old sit/strain composites caused "shrinking" and palette shifts.
+	      const poseW = 224;
+	      const poseH = 191;
+
+	      drawSprite(ctx, poseSprite, this.interior.pottyX, this.interior.pottyY, poseW, poseH, {
+	        rotation: Math.sin(this.elapsed * 7) * 0.01,
+	      });
+
+	      if (!seatedPose && !strainPose) {
+	        this.drawPottyContents(ctx, this.interior.pottyX, this.interior.pottyY, poseW / 198);
+	      }
+
+      for (const steam of this.faceSteam) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.max(0, steam.life * 0.5)})`;
         ctx.beginPath();
-        ctx.moveTo(x, this.pottyY - 56);
-        ctx.lineTo(x, this.pottyY - 18);
+        ctx.ellipse(steam.x, steam.y, steam.size * 0.9, steam.size * 0.55, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+	      for (const swirl of this.swirls) {
+	        const x = this.interior.pottyX + Math.cos(swirl.angle) * swirl.r * 0.6;
+	        const y = this.interior.pottyY - 18 + Math.sin(swirl.angle * 1.2) * swirl.r * 0.35;
+	        ctx.strokeStyle = `rgba(130, 220, 255, ${Math.max(0, swirl.life * 0.8)})`;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(x, y, 6 + swirl.r * 0.06, 0, Math.PI * 2);
         ctx.stroke();
-      }
-    }
+	      }
 
-    if (this.state === "sit" || this.state === "strain" || this.state === "reveal" || this.state === "flush") {
-      ctx.fillStyle = "rgba(255, 243, 189, 0.45)";
-      ctx.beginPath();
-      ctx.ellipse(this.pottyX + 4, this.pottyY - 14, 44, 16, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
+	      // Draw the chicken with posed offsets for sit/strain to keep palette and sizing consistent.
+	      if (seatedPose) {
+	        this.drawChickenActor(ctx, chickenSprite, {
+	          yOffset: 38,
+	          scale: 1.0,
+	          rotation: 0.01,
+	          swingScale: 0.2,
+	          skipShadow: true,
+	        });
+	      } else if (strainPose) {
+	        const pulse = 1 + Math.sin(this.strainPulse) * 0.03;
+	        this.drawChickenActor(ctx, chickenSprite, {
+	          yOffset: 38,
+	          scale: 1.0 * pulse,
+	          rotation: Math.sin(this.strainPulse * 0.55) * 0.03,
+	          swingScale: 0.1,
+	          skipShadow: true,
+	        });
+	      } else {
+	        this.drawChickenActor(ctx, chickenSprite);
+	      }
+	    }
 
-    ctx.fillStyle = "rgba(72, 80, 92, 0.22)";
-    ctx.beginPath();
-    ctx.ellipse(this.pottyX + 2, this.pottyY + 48, 72, 18, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    const seatedPose = this.state === "sit";
-    const strainPose = this.state === "strain";
-    const poseSprite = strainPose ? pottyStrain : seatedPose ? pottySit : potty;
-    const poseW = seatedPose || strainPose ? 224 : 198;
-    const poseH = seatedPose || strainPose ? 216 : 178;
-
-    drawSprite(ctx, poseSprite, this.pottyX, this.pottyY, poseW, poseH, {
-      rotation: this.state === "roll-in" || this.state === "walk" ? Math.sin(this.elapsed * 7) * 0.02 : 0,
-    });
-
-    if (!seatedPose && !strainPose) {
-      this.drawPottyContents(ctx);
-    }
-
-    for (const steam of this.faceSteam) {
-      ctx.fillStyle = `rgba(255,255,255,${Math.max(0, steam.life * 0.5)})`;
-      ctx.beginPath();
-      ctx.ellipse(steam.x, steam.y, steam.size * 0.9, steam.size * 0.55, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    for (const swirl of this.swirls) {
-      const x = this.pottyX + Math.cos(swirl.angle) * swirl.r * 0.6;
-      const y = this.pottyY - 18 + Math.sin(swirl.angle * 1.2) * swirl.r * 0.35;
-      ctx.strokeStyle = `rgba(130, 220, 255, ${Math.max(0, swirl.life * 0.8)})`;
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(x, y, 6 + swirl.r * 0.06, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    for (const reward of this.rewards) {
+    if (this.fade > 0.001) {
       ctx.save();
-      ctx.translate(reward.x, reward.y);
-      ctx.globalAlpha = Math.max(0, reward.life * 0.85);
-      ctx.fillStyle = reward.color;
-
-      if (reward.shape === "heart") {
-        const s = reward.size * 0.08;
-        ctx.scale(s, s);
-        ctx.beginPath();
-        ctx.moveTo(0, 3.5);
-        ctx.bezierCurveTo(0, 1.4, -3, -0.2, -5, 1.6);
-        ctx.bezierCurveTo(-7, 3.4, -6.5, 6.4, -4.3, 8.2);
-        ctx.lineTo(0, 11.2);
-        ctx.lineTo(4.3, 8.2);
-        ctx.bezierCurveTo(6.5, 6.4, 7, 3.4, 5, 1.6);
-        ctx.bezierCurveTo(3, -0.2, 0, 1.4, 0, 3.5);
-        ctx.closePath();
-        ctx.fill();
-      } else {
-        const spikes = 5;
-        const outer = reward.size;
-        const inner = reward.size * 0.45;
-        const rot = this.elapsed * 3.6;
-        ctx.beginPath();
-        for (let i = 0; i < spikes * 2; i += 1) {
-          const angle = rot + (Math.PI * i) / spikes;
-          const radius = i % 2 === 0 ? outer : inner;
-          const sx = Math.cos(angle) * radius;
-          const sy = Math.sin(angle) * radius;
-          if (i === 0) ctx.moveTo(sx, sy);
-          else ctx.lineTo(sx, sy);
-        }
-        ctx.closePath();
-        ctx.fill();
-      }
-
+      ctx.fillStyle = `rgba(0,0,0,${Math.max(0, Math.min(1, this.fade))})`;
+      ctx.fillRect(0, 0, game.world.width, game.world.height);
       ctx.restore();
     }
   }
 
   onFinish(game) {
-    game.chicken.poseScale = 1;
     game.chicken.clearController("potty");
+    game.chicken.cluckTimer = this.prevCluckTimer || 0;
+
+    if (game.outhouse) game.outhouse.doorOpen = false;
+
+    // Place the real chicken at the actor's last exterior position for a seamless return.
+    if (this.stage === "exterior") {
+      const uv = game.penSpace.fromScreen(this.actor.x, this.actor.groundY);
+      game.chicken.u = clamp(uv.u, 0.08, 0.92);
+      game.chicken.v = clamp(uv.v, 0.14, 0.92);
+      game.chicken.projectFromUV();
+      game.chicken.y = game.chicken.groundY;
+    }
   }
 
-  shouldHideChicken() {
-    return this.state === "sit" || this.state === "strain";
-  }
+	  getCinematicCue(game) {
+	    if (this.stage === "interior") {
+	      const flushBeat = this.state === "zoom-in" || this.state === "flush";
+	      return {
+	        priority: 11,
+	        focusX: flushBeat ? this.interior.pottyX - 6 : this.actor.x,
+	        focusY: flushBeat ? this.interior.pottyY - 18 : this.actor.y - 40,
+	        zoom: flushBeat ? 1.28 : 1.06,
+	        vignette: flushBeat ? 0.32 : 0.25,
+	        nightBlend: 0,
+	        ambienceDuck: flushBeat ? 0.48 : 0.38,
+	      };
+	    }
 
-  shouldHideCompanions() {
-    return true;
-  }
-
-  getCinematicCue(game) {
-    const focusX = this.state === "roll-in" || this.state === "walk" ? (game.chicken.x + this.pottyX) * 0.5 : this.pottyX + 10;
-    const focusY = this.pottyY - 8;
-    const heroBeat = this.state === "sit" || this.state === "strain" || this.state === "hop" || this.state === "reveal" || this.state === "flush";
+    const door = this.exteriorDoorTarget(game);
+    const focusX = (this.actor.x + door.x) * 0.5;
+    const focusY = (this.actor.groundY + door.y) * 0.5 - 20;
+    const heroBeat = this.state === "door-open" || this.state === "enter";
     return {
       priority: 11,
       focusX,
       focusY,
-      zoom: heroBeat ? 1.1 : 1.06,
-      vignette: heroBeat ? 0.28 : 0.2,
+      zoom: heroBeat ? 1.08 : 1.06,
+      vignette: heroBeat ? 0.26 : 0.22,
       nightBlend: 0,
-      ambienceDuck: heroBeat ? 0.34 : 0.2,
+      ambienceDuck: heroBeat ? 0.3 : 0.26,
     };
   }
 }
@@ -970,25 +1531,32 @@ class PottyDropAction extends GameAction {
 
 class DiscoAction extends GameAction {
   constructor() {
-    super({ id: "disco", duration: 8.5, major: true });
+    super({ id: "disco", duration: 8.0, major: true });
     this.tiles = [];
   }
 
   start(game) {
     const cols = 7;
     const rows = 4;
-    const tileW = game.pen.w / cols;
-    const tileH = game.pen.h / rows;
-
     this.tiles = [];
-    for (let y = 0; y < rows; y += 1) {
-      for (let x = 0; x < cols; x += 1) {
+    const insetU = 0.06;
+    const insetV = 0.08;
+    const u0 = insetU;
+    const u1 = 1 - insetU;
+    const v0 = insetV;
+    const v1 = 1 - insetV;
+    const du = (u1 - u0) / cols;
+    const dv = (v1 - v0) / rows;
+
+    for (let ry = 0; ry < rows; ry += 1) {
+      for (let rx = 0; rx < cols; rx += 1) {
         this.tiles.push({
-          x: game.pen.x + x * tileW,
-          y: game.pen.y + y * tileH,
-          w: tileW,
-          h: tileH,
+          u0: u0 + rx * du,
+          u1: u0 + (rx + 1) * du,
+          v0: v0 + ry * dv,
+          v1: v0 + (ry + 1) * dv,
           phase: randRange(0, Math.PI * 2),
+          hueSeed: randRange(0, 360),
         });
       }
     }
@@ -1004,37 +1572,84 @@ class DiscoAction extends GameAction {
   }
 
   drawBack(ctx, game) {
-    const dark = 0.16 + Math.sin(this.elapsed * 8) * 0.05;
-    ctx.fillStyle = `rgba(20, 5, 34, ${dark})`;
-    ctx.fillRect(0, 0, game.world.width, game.world.height);
+    // Keep drawBack light; the heavy lifting (floor + beams) is drawn in drawPenFx
+    // so it layers above the pen ground.
+    // Intentionally empty.
+  }
 
-    for (const tile of this.tiles) {
-      const glow = (Math.sin(this.elapsed * 5 + tile.phase) + 1) * 0.5;
-      const hue = (this.elapsed * 180 + tile.phase * 60) % 360;
-      ctx.fillStyle = `hsla(${hue}, 95%, ${36 + glow * 30}%, 0.72)`;
-      ctx.fillRect(tile.x + 4, tile.y + 4, tile.w - 8, tile.h - 8);
-    }
+  drawPenFx(ctx, game) {
+    const p = game.penSpace;
 
+    // Beat-synced pulses to make the lights feel musical.
+    const bpm = 125;
+    const beat = (this.elapsed * bpm) / 60;
+    const beatPhase = beat % 1;
+    const thump = Math.pow(1 - Math.abs(beatPhase * 2 - 1), 3); // 0..1..0
+
+    // Moving beams (drawn without pen clip so they streak across the scene).
     const beamCount = 6;
     const centerX = game.pen.x + game.pen.w / 2;
     const centerY = game.pen.y - 170;
 
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     for (let i = 0; i < beamCount; i += 1) {
-      const angle = this.elapsed * 1.7 + (i / beamCount) * Math.PI * 2;
-      const targetX = centerX + Math.cos(angle) * 600;
-      const targetY = centerY + Math.sin(angle) * 260 + 320;
+      const angle = this.elapsed * 1.65 + (i / beamCount) * Math.PI * 2;
+      const targetX = centerX + Math.cos(angle) * 650;
+      const targetY = centerY + Math.sin(angle) * 280 + 360;
 
       const gradient = ctx.createLinearGradient(centerX, centerY, targetX, targetY);
-      gradient.addColorStop(0, "rgba(255,255,255,0.42)");
+      gradient.addColorStop(0, `rgba(255,255,255,${0.22 + thump * 0.16})`);
       gradient.addColorStop(1, "rgba(255,255,255,0)");
 
       ctx.strokeStyle = gradient;
-      ctx.lineWidth = 22;
+      ctx.lineWidth = 22 + thump * 10;
       ctx.beginPath();
       ctx.moveTo(centerX, centerY);
       ctx.lineTo(targetX, targetY);
       ctx.stroke();
     }
+    ctx.restore();
+
+    // Pen-clipped dance floor tiles.
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(p.backLeft.x, p.backLeft.y);
+    ctx.lineTo(p.backRight.x, p.backRight.y);
+    ctx.lineTo(p.frontRight.x, p.frontRight.y);
+    ctx.lineTo(p.frontLeft.x, p.frontLeft.y);
+    ctx.closePath();
+    ctx.clip();
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const tile of this.tiles) {
+      const a = p.toScreen(tile.u0, tile.v0);
+      const b = p.toScreen(tile.u1, tile.v0);
+      const c = p.toScreen(tile.u1, tile.v1);
+      const d = p.toScreen(tile.u0, tile.v1);
+
+      const glow = (Math.sin(this.elapsed * 6.2 + tile.phase) + 1) * 0.5;
+      const hue = (tile.hueSeed + this.elapsed * 160 + tile.phase * 90) % 360;
+      const light = 34 + glow * 32 + thump * 18;
+      const alpha = 0.62 + glow * 0.18 + thump * 0.12;
+
+      ctx.fillStyle = `hsla(${hue}, 98%, ${light}%, ${alpha})`;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(c.x, c.y);
+      ctx.lineTo(d.x, d.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Tile "edge" highlight to make the grid read even in motion.
+      ctx.strokeStyle = `rgba(255,255,255,${0.05 + glow * 0.08 + thump * 0.08})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.restore();
   }
 
   drawFront(ctx, game) {
@@ -1063,6 +1678,28 @@ class DiscoAction extends GameAction {
       ctx.arc(px, py, randRange(1.5, 4), 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  drawOverlay(ctx, game) {
+    // Extra darkness so disco reads as a club even on bright devices.
+    const bpm = 125;
+    const beat = (this.elapsed * bpm) / 60;
+    const pulse = (Math.sin(beat * Math.PI * 2) + 1) * 0.5; // 0..1
+    const alpha = 0.08 + pulse * 0.06;
+    ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+    ctx.fillRect(0, 0, game.world.width, game.world.height);
+  }
+
+  getCinematicCue(game) {
+    return {
+      priority: 9,
+      focusX: game.penSpace.anchors.center.x,
+      focusY: game.penSpace.anchors.center.y - 30,
+      zoom: 1.06,
+      vignette: 0.42,
+      nightBlend: 0.92,
+      ambienceDuck: 0.58,
+    };
   }
 
   onFinish(game) {
@@ -1519,6 +2156,7 @@ class HayBounceAction extends GameAction {
     super({ id: "hay-bounce", duration: 7.2, major: false });
     this.hay = [];
     this.bounceTimer = 0;
+    this.impactSoundPlayed = false;
   }
 
   start(game) {
@@ -1552,9 +2190,10 @@ class HayBounceAction extends GameAction {
         if (Math.abs(bale.vy) < 80) bale.vy = randRange(-180, -120);
         if (Math.abs(bale.vx) < 20) bale.vx = randRange(-70, 70);
 
-        if (this.bounceTimer <= 0) {
+        if (!this.impactSoundPlayed && this.bounceTimer <= 0) {
+          this.impactSoundPlayed = true;
           this.bounceTimer = 0.12;
-          game.sound.boing();
+          game.sound.hayBaleDrop();
         }
       }
 
@@ -1649,10 +2288,23 @@ class CornConfettiAction extends GameAction {
   constructor() {
     super({ id: "corn-confetti", duration: 5.6, major: false });
     this.bits = [];
+    this.sfxTimer = 0;
+  }
+
+  start(game) {
+    // Audible but gentle: one cue on start, then occasional soft sprinkles while it falls.
+    this.sfxTimer = randRange(0.65, 1.05);
+    game.sound.confettiSprinkle({ gain: 0.9 });
   }
 
   update(dt, game) {
     super.update(dt, game);
+
+    this.sfxTimer -= dt;
+    if (this.sfxTimer <= 0) {
+      this.sfxTimer = randRange(0.9, 1.45);
+      game.sound.confettiSprinkle({ gain: 0.55 });
+    }
 
     for (let i = 0; i < 18; i += 1) {
       this.bits.push({
@@ -1702,7 +2354,7 @@ class StarShowerAction extends GameAction {
     super({ id: "star-shower", duration: 6.4, major: false });
     this.stars = [];
     this.spawnTimer = 0;
-    this.sparkTimer = 0;
+    this.twinkleTimer = 0;
   }
 
   update(dt, game) {
@@ -1724,10 +2376,11 @@ class StarShowerAction extends GameAction {
       });
     }
 
-    this.sparkTimer -= dt;
-    if (this.sparkTimer <= 0) {
-      this.sparkTimer = randRange(0.35, 0.75);
-      game.sound.sparkle();
+    this.twinkleTimer -= dt;
+    if (this.twinkleTimer <= 0) {
+      // Keep it a vibe, not a metronome.
+      this.twinkleTimer = randRange(0.7, 1.25);
+      game.sound.starTwinkle({ gain: 0.75 });
     }
 
     for (const star of this.stars) {
@@ -1882,7 +2535,7 @@ class SunDanceAction extends GameAction {
 export function registerDefaultActions(registry) {
   registry.register({ id: "fireworks", weight: 1.2, create: () => new FireworksAction() });
   registry.register({ id: "jetpack", weight: 1, create: () => new JetpackAction() });
-  registry.register({ id: "potty", weight: 2.4, create: () => new PottyDropAction() });
+  registry.register({ id: "potty", weight: 2.4, create: () => new OuthousePottyAction() });
   registry.register({ id: "disco", weight: 1, create: () => new DiscoAction() });
   registry.register({ id: "egg-hatch", weight: 1.1, create: () => new EggHatchAction() });
   registry.register({ id: "chick-parade", weight: 0.95, create: () => new ChickParadeAction() });
