@@ -1536,7 +1536,7 @@ class PeekabooCoopAction extends GameAction {
     this.stage = "exterior"; // "exterior" | "interior"
     this.fade = 0; // 0..1 black cut overlay
 
-    this.state = "roll-in";
+    this.state = "approach";
     this.stateTime = 0;
 
     this.baseU = 0.5;
@@ -1549,13 +1549,6 @@ class PeekabooCoopAction extends GameAction {
       { kind: "barrel", x: 1080, y: 770, w: 210, h: 250, stick: "left" },
       { kind: "eggs", x: 800, y: 780, w: 190, h: 230, stick: "right" },
     ];
-
-    this.coop = {
-      u: 0.7,
-      v: 0.64,
-      offsetX: -1400,
-      rotation: 0,
-    };
 
     this.actor = {
       x: 800,
@@ -1574,6 +1567,10 @@ class PeekabooCoopAction extends GameAction {
 
     this.exitDoorOpened = false;
     this.exitDoorClosed = false;
+
+    this.prevCoopDoorOpen = false;
+    this.hideWiggleDelay = 4.6;
+    this.hideWiggleStarted = false;
   }
 
   shouldHideChicken() {
@@ -1593,7 +1590,7 @@ class PeekabooCoopAction extends GameAction {
     this.stage = "exterior";
     this.fade = 0;
 
-    this.state = "roll-in";
+    this.state = "approach";
     this.stateTime = 0;
 
     this.baseU = game.chicken.u;
@@ -1613,17 +1610,25 @@ class PeekabooCoopAction extends GameAction {
     this.actor.alpha = 1;
     this.actor.poseScale = 1;
 
-    this.coop.offsetX = -1400;
-    this.coop.rotation = 0;
+    this.prevCoopDoorOpen = !!game.coop?.doorOpen;
+    if (game.coop) game.coop.doorOpen = false;
 
     this.sparkles = [];
     this.confetti = [];
 
     this.roundIndex = 0;
+    // Shuffle the hide order so the kid has to "search" a bit.
+    for (let i = this.rounds.length - 1; i > 0; i -= 1) {
+      const j = randInt(0, i);
+      const tmp = this.rounds[i];
+      this.rounds[i] = this.rounds[j];
+      this.rounds[j] = tmp;
+    }
     this.surpriseAlpha = 0;
 
     this.exitDoorOpened = false;
     this.exitDoorClosed = false;
+    this.hideWiggleStarted = false;
   }
 
   setState(next, game) {
@@ -1633,23 +1638,33 @@ class PeekabooCoopAction extends GameAction {
 
   onTap(game, _tap) {
     // Peekaboo is an interactive mini-scene: taps should advance it, not start new actions.
-    if (this.state === "hide-wait") {
-      this.setState("pop-out", game);
+    if (this.stage === "interior" && this.state === "hide-wait") {
+      const tap = _tap || { x: 0, y: 0 };
+      const round = this.currentRound();
+      // Only the correct prop should reveal the chicken; wrong guesses just "tap".
+      const hit = this.propContainsPoint(round, tap.x, tap.y);
+      if (hit) {
+        this.setState("pop-out", game);
+      } else {
+        game.sound.tap();
+      }
       return true;
     }
     return true;
   }
 
   coopMetrics(game) {
-    const sprite = game.assets.get("coop");
-    const p = game.penSpace.toScreen(this.coop.u, this.coop.v);
-    const s = game.penSpace.depthScale(this.coop.v);
+    const sprite = game.assets.get(game.coop?.doorOpen ? "coopOpen" : "coopClosed");
+    const u = game.coop?.u ?? 0.7;
+    const v = game.coop?.v ?? 0.64;
+    const p = game.penSpace.toScreen(u, v);
+    const s = game.penSpace.depthScale(v);
     const spriteW = sprite?.width || 760;
     const spriteH = sprite?.height || 620;
     const aspect = spriteW / Math.max(1, spriteH);
     const h = 290 * s;
     const w = h * aspect;
-    const x = p.x + this.coop.offsetX;
+    const x = p.x;
     const y = p.y;
     return { sprite, x, y, w, h, s };
   }
@@ -1692,8 +1707,9 @@ class PeekabooCoopAction extends GameAction {
     const s = 1.02;
     const stickRight = round.stick === "right";
     return {
-      x: round.x + (stickRight ? round.w * 0.55 : -round.w * 0.55),
-      y: round.y - 16,
+      // Place the chicken "inside" the prop so the prop can cover most of it.
+      x: round.x + (stickRight ? round.w * 0.08 : -round.w * 0.08),
+      y: round.y - 24,
       dir: stickRight ? 1 : -1,
       scale: s,
     };
@@ -1716,8 +1732,8 @@ class PeekabooCoopAction extends GameAction {
     this.stateTime += dt;
 
     const d = {
-      rollIn: 1.4,
       approach: 1.1,
+      doorOpen: 0.35,
       enter: 0.7,
       cutIn: 0.35,
       interiorReveal: 0.35,
@@ -1727,28 +1743,16 @@ class PeekabooCoopAction extends GameAction {
       cutOut: 0.35,
       exitReveal: 0.25,
       exit: 0.7,
-      rollOut: 1.4,
     };
 
     const m = this.coopMetrics(game);
-    this.coop.rotation = Math.sin(this.elapsed * 9.0) * 0.012;
     this.surpriseAlpha *= 0.92;
 
-    if (this.state === "roll-in") {
-      const t = clamp(this.stateTime / d.rollIn, 0, 1);
-      this.coop.offsetX = lerp(-1400, 0, easeOutCubic(t));
-
-      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
-      this.actor.groundY = m.y;
-      this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.2) * 2.2;
-      this.actor.alpha = 1;
-
-      if (this.stateTime >= d.rollIn) this.setState("approach", game);
-    } else if (this.state === "approach") {
+    if (this.state === "approach") {
       // Walk to the coop "door" area.
       const doorX = m.x - m.w * 0.08;
       const tx = doorX;
-      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.visualScale = game.penSpace.depthScale(game.coop?.v ?? 0.64);
       this.actor.groundY = m.y;
       this.actor.x += (tx - this.actor.x) * Math.min(1, dt * 5.2);
       this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 11.0) * 2.2;
@@ -1756,9 +1760,14 @@ class PeekabooCoopAction extends GameAction {
       this.actor.alpha = 1;
 
       if (this.stateTime >= d.approach) {
-        game.sound.doorCreakOpen();
-        this.setState("enter", game);
+        this.setState("door-open", game);
       }
+    } else if (this.state === "door-open") {
+      if (this.stateTime < dt * 1.2) {
+        if (game.coop) game.coop.doorOpen = true;
+        game.sound.doorCreakOpen();
+      }
+      if (this.stateTime >= d.doorOpen) this.setState("enter", game);
     } else if (this.state === "enter") {
       const t = clamp(this.stateTime / d.enter, 0, 1);
       // Slip behind the coop and fade out as if entering.
@@ -1767,10 +1776,11 @@ class PeekabooCoopAction extends GameAction {
       this.actor.groundY = m.y;
       this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.8) * 2.2;
       this.actor.alpha = 1 - easeInOutCubic(t);
-      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.visualScale = game.penSpace.depthScale(game.coop?.v ?? 0.64);
       this.actor.dir = 1;
 
       if (this.stateTime >= d.enter) {
+        if (game.coop) game.coop.doorOpen = false;
         game.sound.doorCreakClose();
         this.setState("cut-in", game);
       }
@@ -1783,7 +1793,8 @@ class PeekabooCoopAction extends GameAction {
       }
     } else if (this.state === "interior-reveal") {
       this.fade = 1 - clamp(this.stateTime / d.interiorReveal, 0, 1);
-      this.actor.alpha = 1;
+      // Snap to the hidden pose; only a small hint is shown during hide-wait.
+      this.actor.alpha = 0;
       this.actor.visualScale = 1.02;
       this.actor.poseScale = 1;
       const round = this.currentRound();
@@ -1793,18 +1804,24 @@ class PeekabooCoopAction extends GameAction {
       this.actor.dir = hidden.dir;
       if (this.stateTime >= d.interiorReveal) {
         this.fade = 0;
+        this.hideWiggleStarted = false;
         this.setState("hide-wait", game);
       }
     } else if (this.state === "hide-wait") {
       // Hold indefinitely until tapped.
       const round = this.currentRound();
       const hidden = this.roundChickenHiddenPose(round);
-      this.actor.alpha = 1;
+      this.actor.alpha = 0;
       this.actor.visualScale = 1.02;
       this.actor.poseScale = 1;
       this.actor.dir = hidden.dir;
       this.actor.x = hidden.x + Math.sin(this.elapsed * 0.9) * 1.8;
       this.actor.y = hidden.y + Math.sin(this.elapsed * 11.2) * 2.4;
+
+      if (!this.hideWiggleStarted && this.stateTime >= this.hideWiggleDelay) {
+        this.hideWiggleStarted = true;
+        game.sound.cluck({ gain: 0.28, rate: 1.12 });
+      }
     } else if (this.state === "pop-out") {
       const round = this.currentRound();
       const hidden = this.roundChickenHiddenPose(round);
@@ -1836,6 +1853,7 @@ class PeekabooCoopAction extends GameAction {
         } else {
           this.roundIndex += 1;
           game.sound.starTwinkle({ gain: 0.85 });
+          this.hideWiggleStarted = false;
           this.setState("move-hide", game);
         }
       }
@@ -1850,7 +1868,10 @@ class PeekabooCoopAction extends GameAction {
       this.actor.y += (hidden.y - this.actor.y) * Math.min(1, dt * 5.6);
       this.actor.y += Math.sin(this.elapsed * 11.6) * 1.4;
 
-      if (this.stateTime >= d.moveHide) this.setState("hide-wait", game);
+      if (this.stateTime >= d.moveHide) {
+        this.actor.alpha = 0;
+        this.setState("hide-wait", game);
+      }
     } else if (this.state === "celebrate") {
       this.actor.poseScale = 1 + Math.sin(this.elapsed * 8.0) * 0.05;
       this.actor.y += Math.sin(this.elapsed * 12.4) * 0.8;
@@ -1866,10 +1887,11 @@ class PeekabooCoopAction extends GameAction {
       this.fade = 1 - clamp(this.stateTime / d.exitReveal, 0, 1);
       if (!this.exitDoorOpened && this.stateTime < dt * 1.2) {
         this.exitDoorOpened = true;
+        if (game.coop) game.coop.doorOpen = true;
         game.sound.doorCreakOpen();
       }
       // Reappear just behind the coop, then step out.
-      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.visualScale = game.penSpace.depthScale(game.coop?.v ?? 0.64);
       this.actor.alpha = 1;
       this.actor.dir = 1;
       this.actor.groundY = m.y;
@@ -1886,17 +1908,13 @@ class PeekabooCoopAction extends GameAction {
       this.actor.groundY = m.y;
       this.actor.y = this.actor.groundY + Math.sin(this.elapsed * 10.2) * 2.2;
       this.actor.alpha = 1;
-      this.actor.visualScale = game.penSpace.depthScale(this.coop.v);
+      this.actor.visualScale = game.penSpace.depthScale(game.coop?.v ?? 0.64);
       if (!this.exitDoorClosed && this.stateTime >= d.exit * 0.72) {
         this.exitDoorClosed = true;
+        if (game.coop) game.coop.doorOpen = false;
         game.sound.doorCreakClose();
       }
-      if (this.stateTime >= d.exit) this.setState("roll-out", game);
-    } else if (this.state === "roll-out") {
-      const t = clamp(this.stateTime / d.rollOut, 0, 1);
-      this.coop.offsetX = lerp(0, 1400, easeInOutCubic(t));
-      this.actor.alpha = 1 - easeInOutCubic(t);
-      if (this.stateTime >= d.rollOut) this.finish(game);
+      if (this.stateTime >= d.exit) this.finish(game);
     }
 
     for (const sp of this.sparkles) {
@@ -1977,19 +1995,7 @@ class PeekabooCoopAction extends GameAction {
   }
 
   drawCoop(ctx, game) {
-    const m = this.coopMetrics(game);
-
-    ctx.save();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "rgba(0,0,0,0.16)";
-    ctx.beginPath();
-    ctx.ellipse(m.x, m.y + 10 * m.s, m.w * 0.42, 10 * m.s, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.translate(m.x, m.y - m.h);
-    ctx.rotate(this.coop.rotation);
-    ctx.drawImage(m.sprite, -m.w / 2, 0, m.w, m.h);
-    ctx.restore();
+    // Coop is a permanent pen fixture (drawn by Game); action does not draw it here.
   }
 
   drawCoopInterior(ctx, game) {
@@ -2141,23 +2147,34 @@ class PeekabooCoopAction extends GameAction {
 
     if (this.stage !== "exterior") return;
 
-    // Exterior: actor first so coop can occlude entrance/exit.
-    this.drawChickenActor(ctx, chickenSprite, { skipShadow: true });
-    this.drawCoop(ctx, game);
+    // Exterior: draw the cinematic chicken actor (the base chicken is frozen/hidden).
+    // Some beats need the coop to occlude the chicken (enter/exit-reveal); those are drawn in drawPenFx instead.
+    const behindCoop = this.state === "enter" || this.state === "exit-reveal";
+    if (!behindCoop) this.drawChickenActor(ctx, chickenSprite, { skipShadow: true });
     this.drawConfetti(ctx);
     this.drawSparkles(ctx);
   }
 
+  drawPenFx(ctx, game) {
+    if (this.stage !== "exterior") return;
+    const behindCoop = this.state === "enter" || this.state === "exit-reveal";
+    if (!behindCoop) return;
+
+    // Draw on top of pen ground, underneath coop + fence rails/posts.
+    const chickenSprite = game.assets.get("chicken");
+    this.drawChickenActor(ctx, chickenSprite, { skipShadow: false });
+  }
+
   getCinematicCue(game) {
     if (this.stage === "interior") {
-      const round = this.currentRound();
-      const focusX = this.state === "hide-wait" ? round.x : this.actor.x;
-      const focusY = this.state === "hide-wait" ? round.y - round.h * 0.55 : this.actor.y - 40;
+      // Keep all 3 props on screen so the kid can search.
+      const focusX = 800;
+      const focusY = 560;
       return {
         priority: 10,
         focusX,
         focusY,
-        zoom: this.state === "pop-out" ? 1.2 : 1.14,
+        zoom: this.state === "pop-out" ? 1.12 : 1.06,
         vignette: 0.42,
         nightBlend: 0,
         ambienceDuck: 0.55,
@@ -2169,7 +2186,7 @@ class PeekabooCoopAction extends GameAction {
       priority: 9,
       focusX: m.x,
       focusY: m.y - m.h * 0.35,
-      zoom: this.state === "roll-in" ? 1.06 : 1.1,
+      zoom: 1.1,
       vignette: 0.34,
       nightBlend: 0,
       ambienceDuck: 0.45,
@@ -2182,14 +2199,17 @@ class PeekabooCoopAction extends GameAction {
 
       const chickenSprite = game.assets.get("chicken");
       const round = this.currentRound();
-      const popFront = this.state === "pop-out" || this.state === "move-hide" || this.state === "celebrate";
+      const showFullChicken = this.state === "pop-out" || this.state === "move-hide" || this.state === "celebrate";
 
-      // When hiding, the prop should cover most of the chicken (only part sticking out).
-      if (!popFront) {
-        this.drawChickenActor(ctx, chickenSprite, { skipShadow: true });
-        this.drawInteriorProp(ctx, game, round);
-      } else {
-        this.drawInteriorProp(ctx, game, round);
+      // The kid should always see all 3 hiding objects.
+      for (const prop of this.rounds) {
+        const isHiddenProp = prop === round;
+        if (this.state === "hide-wait" && isHiddenProp) {
+          this.drawPeekHint(ctx, game, prop);
+        }
+        this.drawInteriorProp(ctx, game, prop);
+      }
+      if (showFullChicken) {
         this.drawChickenActor(ctx, chickenSprite, { skipShadow: true });
       }
 
@@ -2207,10 +2227,51 @@ class PeekabooCoopAction extends GameAction {
     game.chicken.clearController("peekaboo-coop");
     game.chicken.cluckTimer = this.prevCluckTimer || 0;
 
+    if (game.coop) game.coop.doorOpen = this.prevCoopDoorOpen;
+
     game.chicken.u = this.baseU;
     game.chicken.v = this.baseV;
     game.chicken.projectFromUV();
     game.chicken.y = game.chicken.groundY;
+  }
+
+  propContainsPoint(round, x, y) {
+    // Interior props use pixel coordinates; treat (x,y) as world coords.
+    const x0 = round.x - round.w / 2;
+    const x1 = round.x + round.w / 2;
+    const y0 = round.y - round.h;
+    const y1 = round.y;
+    return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  }
+
+  drawPeekHint(ctx, game, round) {
+    const hint = game.assets.get("chickenPeek");
+    if (!hint) return;
+    const stickRight = round.stick === "right";
+    const wiggle = this.hideWiggleStarted ? clamp((this.stateTime - this.hideWiggleDelay) / 1.6, 0, 1) : 0;
+    const wiggleAmp = 1 + wiggle * 3.4;
+    const wobX = Math.sin(this.elapsed * (10.2 + wiggle * 2.2)) * wiggleAmp;
+    const wobY = Math.cos(this.elapsed * (12.0 + wiggle * 2.8)) * wiggleAmp * 0.55;
+    const rot = Math.sin(this.elapsed * (8.5 + wiggle * 2.8)) * 0.08 * wiggle;
+
+    const x = round.x + (stickRight ? round.w * 0.44 : -round.w * 0.44) + wobX;
+    const y = round.y - round.h * 0.62 + wobY;
+    const w = 120;
+    const h = 120;
+
+    // Our hint sprite may include a "prop edge" guide line; crop it off so it reads cleanly next to any prop.
+    const srcW = hint.width || 420;
+    const srcH = hint.height || 420;
+    const cropW = Math.floor(srcW * 0.84);
+    const cropX = stickRight ? 0 : srcW - cropW; // keep the chicken side, crop the edge-line side
+
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.scale(!stickRight ? -1 : 1, 1);
+    ctx.drawImage(hint, cropX, 0, cropW, srcH, -w / 2, -h / 2, w, h);
+    ctx.restore();
   }
 }
 
