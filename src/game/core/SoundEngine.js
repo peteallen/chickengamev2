@@ -86,6 +86,7 @@ export class SoundEngine {
       // Sparkle is used in several "celebration" actions; keep it subtle to avoid fatigue.
       // Cache-bust so returning players pick up the less-obnoxious sparkle.
       sparkle: { url: "./public/assets/sfx/sparkle.mp3?v=soft1", gain: 0.7, rateJitter: 0.04 },
+      featherTornado: { url: "./public/assets/sfx/feather_tornado.mp3?v=feather1", gain: 0.85, rateJitter: 0.04 },
       // Dedicated, softer SFX for specific actions.
       confettiSprinkle1: {
         url: "./public/assets/sfx/confetti_sprinkle_01.mp3?v=soft2",
@@ -691,6 +692,12 @@ export class SoundEngine {
   sparkle() {
     if (this.playSample("sparkle")) return;
     this.playTone({ freq: 1200, type: "triangle", duration: 0.08, gain: 0.035, freqEnd: 1640 });
+  }
+
+  featherTornado({ gain = 1, rate = 1 } = {}) {
+    if (this.playSample("featherTornado", { gain, rate })) return;
+    this.playNoise({ duration: 0.22, gain: 0.04 * gain, lowpass: 5800, highpass: 700, playbackRate: 1.15 * rate });
+    this.playTone({ freq: 760, type: "triangle", duration: 0.1, gain: 0.02 * gain, startAt: 0.03, freqEnd: 980 });
   }
 
   peekabooChorus({ gain = 1, rate = 1 } = {}) {

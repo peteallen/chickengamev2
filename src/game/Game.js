@@ -12,6 +12,7 @@ import { CompanionChick } from "./entities/CompanionChick.js";
 const ASSET_MANIFEST = {
   chicken: "./public/assets/sprites/locked/chicken.png?v=locked3",
   chick: "./public/assets/sprites/locked/chick.png?v=locked3",
+  feather: "./public/assets/sprites/locked/feather.png?v=feather1",
   egg: "./public/assets/sprites/locked/egg.png?v=locked3",
   potty: "./public/assets/sprites/locked/potty.png?v=locked4",
   pottySit: "./public/assets/sprites/locked/potty-sit.png?v=locked1",
@@ -199,8 +200,8 @@ export class Game {
     const action = preferredId ? this.registry.createById(preferredId) || this.registry.next() : this.registry.next();
     if (!action) return;
 
-    if (action.id === "potty" || action.id === "peekaboo-coop") {
-      // Potty is a hero moment: clear scene clutter so it always reads clearly.
+    if (action.id === "potty" || action.id === "peekaboo-coop" || action.id === "feather-tornado") {
+      // Hero cutscenes read best without overlapping scene clutter.
       for (let i = this.activeActions.length - 1; i >= 0; i -= 1) {
         const existing = this.activeActions[i];
         existing.cancel(this);

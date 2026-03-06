@@ -2638,6 +2638,591 @@ class EggHatchAction extends GameAction {
   }
 }
 
+class FeatherTornadoAction extends GameAction {
+  constructor() {
+    super({ id: "feather-tornado", duration: 7.2, major: true });
+
+    this.state = "windup";
+    this.stateTime = 0;
+    this.prevCluckTimer = 0;
+
+    this.baseU = 0.5;
+    this.baseV = 0.76;
+    this.baseX = 800;
+    this.baseGroundY = 650;
+    this.baseDir = 1;
+
+    this.actor = {
+      x: 800,
+      y: 650,
+      groundY: 650,
+      visualScale: 1,
+      dir: 1,
+      alpha: 1,
+      poseScale: 1,
+      rotation: 0,
+    };
+
+    this.looseFeathers = [];
+    this.floorRings = [];
+    this.featherSpawnTimer = 0;
+    this.ringTimer = 0;
+    this.boostMeter = 0;
+    this.boostTimer = 0;
+    this.boostCount = 0;
+    this.tapSfxCooldown = 0;
+    this.hatFeatherOn = false;
+  }
+
+  start(game) {
+    this.elapsed = 0;
+    this.state = "windup";
+    this.stateTime = 0;
+    this.prevCluckTimer = game.chicken.cluckTimer;
+    game.chicken.cluckTimer = 999;
+
+    this.baseU = game.chicken.u;
+    this.baseV = game.chicken.v;
+    this.baseX = game.chicken.x;
+    this.baseGroundY = game.chicken.groundY;
+    this.baseDir = game.chicken.dir || 1;
+
+    this.actor.x = this.baseX;
+    this.actor.y = this.baseGroundY;
+    this.actor.groundY = this.baseGroundY;
+    this.actor.visualScale = game.chicken.visualScale;
+    this.actor.dir = this.baseDir;
+    this.actor.alpha = 1;
+    this.actor.poseScale = 1;
+    this.actor.rotation = 0;
+
+    this.looseFeathers = [];
+    this.floorRings = [];
+    this.featherSpawnTimer = 0;
+    this.ringTimer = 0;
+    this.boostMeter = 0;
+    this.boostTimer = 0;
+    this.boostCount = 0;
+    this.tapSfxCooldown = 0;
+    this.hatFeatherOn = false;
+
+    game.chicken.setController("feather-tornado", () => true);
+    game.sound.featherTornado({ gain: 0.95, rate: 0.98 });
+    this.spawnFloorRing({ radius: 28, alpha: 0.11, thickness: 7, life: 0.62, speed: 120 });
+  }
+
+  currentState() {
+    if (this.elapsed < 0.8) return "windup";
+    if (this.elapsed < 1.6) return "spinUp";
+    if (this.elapsed < 5.0) return "coreSpin";
+    if (this.elapsed < 6.0) return "collapse";
+    return "dizzy";
+  }
+
+  stateProgress() {
+    if (this.state === "windup") return clamp(this.elapsed / 0.8, 0, 1);
+    if (this.state === "spinUp") return clamp((this.elapsed - 0.8) / 0.8, 0, 1);
+    if (this.state === "coreSpin") return clamp((this.elapsed - 1.6) / 3.4, 0, 1);
+    if (this.state === "collapse") return clamp((this.elapsed - 5.0) / 1.0, 0, 1);
+    return clamp((this.elapsed - 6.0) / 1.2, 0, 1);
+  }
+
+  funnelProgress() {
+    if (this.state === "spinUp") return easeInOutCubic(this.stateProgress());
+    if (this.state === "coreSpin") return 1;
+    if (this.state === "collapse") return 1 - easeInOutCubic(this.stateProgress());
+    return 0;
+  }
+
+  boostPulse() {
+    return this.boostTimer > 0 ? easeOutCubic(this.boostTimer / 0.45) : 0;
+  }
+
+  transitionTo(next, game) {
+    this.state = next;
+    this.stateTime = 0;
+
+    if (next === "spinUp") {
+      this.spawnFloorRing({ radius: 34, alpha: 0.13, thickness: 8, life: 0.65, speed: 150 });
+      this.spawnLooseFeathers(6, {
+        originX: this.baseX,
+        originY: this.baseGroundY - 74,
+        speedScale: 0.82,
+        lift: 0.8,
+        foregroundChance: 0.15,
+      });
+    } else if (next === "coreSpin") {
+      this.spawnFloorRing({ radius: 50, alpha: 0.24, thickness: 11, life: 0.58, speed: 200 });
+      this.spawnLooseFeathers(16, {
+        originX: this.baseX,
+        originY: this.baseGroundY - 112,
+        speedScale: 1.05,
+        lift: 1.05,
+        foregroundChance: 0.28,
+      });
+    } else if (next === "collapse") {
+      this.spawnFloorRing({ radius: 62, alpha: 0.28, thickness: 14, life: 0.56, speed: 228 });
+      this.spawnLooseFeathers(22, {
+        originX: this.baseX,
+        originY: this.baseGroundY - 138,
+        speedScale: 1.22,
+        lift: 1.16,
+        foregroundChance: 0.36,
+      });
+    } else if (next === "dizzy") {
+      this.hatFeatherOn = true;
+      game.sound.cluck({ gain: 0.55, rate: 0.92 });
+    }
+  }
+
+  spawnLooseFeathers(
+    count,
+    { originX = this.actor.x, originY = this.actor.y - 68, speedScale = 1, lift = 1, foregroundChance = 0.24 } = {},
+  ) {
+    for (let i = 0; i < count; i += 1) {
+      const angle = randRange(-Math.PI, Math.PI);
+      const speed = randRange(72, 190) * speedScale;
+      const foreground = Math.random() < foregroundChance;
+      this.looseFeathers.push({
+        x: originX + randRange(-22, 22),
+        y: originY + randRange(-18, 18),
+        vx: Math.cos(angle) * speed,
+        vy: -randRange(120, 260) * lift + Math.sin(angle) * 40,
+        life: randRange(0.82, 1.72),
+        size: randRange(16, 30) * speedScale,
+        angle: randRange(0, Math.PI * 2),
+        spin: randRange(-5.8, 5.8),
+        phase: randRange(0, Math.PI * 2),
+        drift: randRange(6, 24),
+        foreground,
+      });
+    }
+
+    if (this.looseFeathers.length > 240) {
+      this.looseFeathers.splice(0, this.looseFeathers.length - 240);
+    }
+  }
+
+  spawnFloorRing({ radius = 36, alpha = 0.18, thickness = 8, life = 0.62, speed = 170 } = {}) {
+    this.floorRings.push({
+      x: this.actor.x,
+      y: this.actor.groundY + 10,
+      radius,
+      alpha,
+      thickness,
+      life,
+      speed,
+    });
+
+    if (this.floorRings.length > 36) {
+      this.floorRings.splice(0, this.floorRings.length - 36);
+    }
+  }
+
+  updateActor() {
+    const pulse = this.boostPulse();
+    this.actor.groundY = this.baseGroundY;
+    this.actor.visualScale = this.actor.visualScale || 1;
+    this.actor.dir = this.baseDir;
+
+    if (this.state === "windup") {
+      const p = easeInOutCubic(this.stateProgress());
+      this.actor.x = this.baseX + Math.sin(this.elapsed * 18) * (1.5 + p * 4);
+      this.actor.y = this.baseGroundY + p * 5 + Math.sin(this.elapsed * 15) * 1.6;
+      this.actor.poseScale = 1 - p * 0.04;
+      this.actor.rotation = Math.sin(this.elapsed * 10.5) * 0.05;
+      this.actor.alpha = 1;
+    } else if (this.state === "spinUp") {
+      const p = easeInOutCubic(this.stateProgress());
+      this.actor.x = this.baseX + Math.sin(this.elapsed * 28) * (6 + p * 8 + pulse * 2);
+      this.actor.y = this.baseGroundY - 20 * p + Math.sin(this.elapsed * 22) * (2.5 + p * 1.5);
+      this.actor.poseScale = 0.98 + p * 0.05;
+      this.actor.rotation = this.elapsed * (10 + p * 18);
+      this.actor.alpha = 0.92 - p * 0.18;
+    } else if (this.state === "coreSpin") {
+      const spinRate = 20 + this.boostMeter * 16 + pulse * 14;
+      this.actor.x = this.baseX + Math.sin(this.elapsed * 36) * (6 + this.boostMeter * 8 + pulse * 4);
+      this.actor.y = this.baseGroundY - 18 - Math.sin(this.elapsed * 18) * (2.5 + this.boostMeter * 4);
+      this.actor.poseScale = 1.02;
+      this.actor.rotation = this.elapsed * spinRate;
+      this.actor.alpha = 0.25;
+    } else if (this.state === "collapse") {
+      const p = easeOutCubic(this.stateProgress());
+      this.actor.x = this.baseX + Math.sin(this.elapsed * 16) * (10 * (1 - p));
+      this.actor.y = this.baseGroundY - 18 * (1 - p) + Math.sin(this.elapsed * 9) * (1.6 + (1 - p) * 1.8);
+      this.actor.poseScale = 1.02 - p * 0.02;
+      this.actor.rotation = (1 - p) * (this.elapsed * 12 + this.boostMeter * 4);
+      this.actor.alpha = 0.4 + p * 0.6;
+    } else {
+      const p = this.stateProgress();
+      this.actor.x = this.baseX + Math.sin(this.elapsed * 7.2) * (6 * (1 - p * 0.35));
+      this.actor.y = this.baseGroundY + Math.abs(Math.sin(this.elapsed * 8.2)) * 1.3;
+      this.actor.poseScale = 1;
+      this.actor.rotation = Math.sin(this.elapsed * 7.2) * 0.12 * (1 - p * 0.55);
+      this.actor.alpha = 1;
+    }
+  }
+
+  updateLooseFeathers(dt, game) {
+    let write = 0;
+    for (let i = 0; i < this.looseFeathers.length; i += 1) {
+      const feather = this.looseFeathers[i];
+      feather.vx *= 0.996;
+      feather.vy += (feather.foreground ? 176 : 128) * dt;
+      feather.x += (feather.vx + Math.sin(this.elapsed * 6 + feather.phase) * feather.drift) * dt;
+      feather.y += feather.vy * dt;
+      feather.angle += feather.spin * dt;
+      feather.life -= dt;
+      if (feather.life > 0 && feather.y < game.world.height + 120) {
+        this.looseFeathers[write] = feather;
+        write += 1;
+      }
+    }
+    this.looseFeathers.length = write;
+  }
+
+  updateFloorRings(dt) {
+    let write = 0;
+    for (let i = 0; i < this.floorRings.length; i += 1) {
+      const ring = this.floorRings[i];
+      ring.life -= dt;
+      ring.radius += ring.speed * dt;
+      if (ring.life > 0) {
+        this.floorRings[write] = ring;
+        write += 1;
+      }
+    }
+    this.floorRings.length = write;
+  }
+
+  onTap(game, _tap) {
+    if (this.state === "coreSpin") {
+      this.boostMeter = clamp(this.boostMeter + 0.18, 0, 1);
+      this.boostTimer = 0.45;
+      this.boostCount += 1;
+      this.spawnLooseFeathers(10, {
+        originX: this.actor.x,
+        originY: this.actor.y - 96,
+        speedScale: 1.3,
+        lift: 1.18,
+        foregroundChance: 0.36,
+      });
+      this.spawnFloorRing({
+        radius: 58 + this.boostMeter * 16,
+        alpha: 0.3,
+        thickness: 13,
+        life: 0.46,
+        speed: 232,
+      });
+      if (this.tapSfxCooldown <= 0) {
+        game.sound.featherTornado({ gain: 0.72, rate: 1.04 + this.boostMeter * 0.18 });
+        this.tapSfxCooldown = 0.16;
+      }
+    }
+    return true;
+  }
+
+  update(dt, game) {
+    this.elapsed += dt;
+    this.tapSfxCooldown = Math.max(0, this.tapSfxCooldown - dt);
+    this.boostTimer = Math.max(0, this.boostTimer - dt);
+    this.boostMeter = Math.max(0, this.boostMeter - dt * (this.state === "coreSpin" ? 0.05 : 0.28));
+
+    const nextState = this.currentState();
+    if (nextState !== this.state) {
+      this.transitionTo(nextState, game);
+    }
+    this.stateTime += dt;
+
+    this.featherSpawnTimer -= dt;
+    if (this.state !== "dizzy" && this.featherSpawnTimer <= 0) {
+      let interval = 0.22;
+      let count = 1;
+      let speedScale = 0.78;
+      let lift = 0.82;
+
+      if (this.state === "spinUp") {
+        interval = 0.1;
+        count = 2;
+        speedScale = 0.95;
+        lift = 0.95;
+      } else if (this.state === "coreSpin") {
+        interval = 0.055 - this.boostMeter * 0.015;
+        count = this.boostMeter > 0.45 ? 3 : 2;
+        speedScale = 1 + this.boostMeter * 0.22;
+        lift = 1.04 + this.boostMeter * 0.1;
+      } else if (this.state === "collapse") {
+        interval = 0.085;
+        count = 2;
+        speedScale = 1.08;
+        lift = 1.0;
+      }
+
+      this.spawnLooseFeathers(count, {
+        originX: this.actor.x,
+        originY: this.actor.y - 92,
+        speedScale,
+        lift,
+        foregroundChance: this.state === "coreSpin" ? 0.28 : 0.18,
+      });
+      this.featherSpawnTimer = Math.max(0.03, interval);
+    }
+
+    const funnelT = this.funnelProgress();
+    this.ringTimer -= dt;
+    if (funnelT > 0.04 && this.ringTimer <= 0) {
+      this.spawnFloorRing({
+        radius: 34 + this.boostMeter * 16,
+        alpha: 0.12 + funnelT * 0.08,
+        thickness: 7 + this.boostMeter * 2,
+        life: 0.5,
+        speed: 146 + this.boostMeter * 34,
+      });
+      this.ringTimer = this.state === "coreSpin" ? 0.11 : 0.18;
+    }
+
+    this.updateActor();
+    this.updateLooseFeathers(dt, game);
+    this.updateFloorRings(dt);
+
+    if (this.elapsed >= this.duration) {
+      this.finish(game);
+    }
+  }
+
+  shouldHideChicken() {
+    return true;
+  }
+
+  shouldHideCompanions() {
+    return true;
+  }
+
+  shouldSuppressTapBursts() {
+    return true;
+  }
+
+  funnelMetrics() {
+    const funnelT = this.funnelProgress();
+    if (funnelT <= 0.001) return null;
+
+    const pulse = this.boostPulse();
+    const collapseT = this.state === "collapse" ? this.stateProgress() : 0;
+    const baseWidth = lerp(92, 128, this.boostMeter);
+    const widthScale =
+      this.state === "spinUp" ? lerp(0.56, 1, easeInOutCubic(this.stateProgress())) : lerp(1, 0.42, collapseT);
+    const heightScale =
+      this.state === "spinUp" ? lerp(0.28, 1, easeInOutCubic(this.stateProgress())) : 1 - collapseT * 0.45;
+
+    const bottomWidth = baseWidth * widthScale * (1 + pulse * 0.06);
+    return {
+      bottomWidth,
+      topWidth: Math.max(18, bottomWidth * 0.34),
+      height: 250 * funnelT * heightScale * (0.84 + this.boostMeter * 0.08 + pulse * 0.08),
+      alpha: (0.18 + funnelT * 0.4) * (0.9 + pulse * 0.1),
+    };
+  }
+
+  drawActor(
+    ctx,
+    game,
+    { alpha = 1, rotation = 0, shadowScale = 1, blurCopies = 0, featherHat = false } = {},
+  ) {
+    const chickenSprite = game.assets.get("chicken");
+    const featherSprite = game.assets.get("feather");
+    const size = 224 * this.actor.visualScale * this.actor.poseScale;
+    const drawX = this.actor.x;
+    const drawY = this.actor.y - 62 * this.actor.visualScale;
+    const shadowW = 66 * this.actor.visualScale * shadowScale;
+    const shadowH = 17 * this.actor.visualScale * shadowScale;
+
+    if (shadowScale > 0.01) {
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.16)";
+      ctx.beginPath();
+      ctx.ellipse(drawX, this.actor.groundY + 44 * this.actor.visualScale, shadowW, shadowH, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    const drawOne = (rot, alphaScale, xOff = 0, yOff = 0, withHat = false) => {
+      ctx.save();
+      ctx.globalAlpha = alpha * alphaScale;
+      ctx.translate(drawX + xOff, drawY + yOff);
+      ctx.rotate(rot);
+      ctx.scale(this.actor.dir, 1);
+      ctx.drawImage(chickenSprite, -size / 2, -size / 2, size, size);
+
+      if (withHat) {
+        const hatW = 38 * this.actor.visualScale;
+        const hatH = 58 * this.actor.visualScale;
+        ctx.save();
+        ctx.translate(18 * this.actor.visualScale, -88 * this.actor.visualScale);
+        ctx.rotate(-0.54);
+        ctx.drawImage(featherSprite, -hatW * 0.42, -hatH * 0.86, hatW, hatH);
+        ctx.restore();
+      }
+      ctx.restore();
+    };
+
+    if (blurCopies > 0) {
+      for (let i = 0; i < blurCopies; i += 1) {
+        const angle = rotation + (i / Math.max(1, blurCopies)) * Math.PI * 2;
+        const dist = 3.2 + blurCopies * 1.4;
+        drawOne(rotation + (i - blurCopies / 2) * 0.22, 0.12, Math.cos(angle) * dist, Math.sin(angle * 0.9) * dist * 0.55);
+      }
+    }
+
+    drawOne(rotation, 1, 0, 0, featherHat);
+  }
+
+  drawFunnel(ctx, game) {
+    const funnel = this.funnelMetrics();
+    if (!funnel) return;
+
+    const feather = game.assets.get("feather");
+    const cx = this.actor.x;
+    const groundY = this.actor.groundY + 6;
+    const pulse = this.boostPulse();
+    const swirlSpeed = 12 + this.boostMeter * 7 + pulse * 9;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+
+    for (let i = 0; i < 5; i += 1) {
+      const t = i / 4;
+      const y0 = groundY;
+      const y1 = groundY - funnel.height + t * 14;
+      const swing = Math.sin(this.elapsed * swirlSpeed * 0.2 + i * 0.86) * (18 + this.boostMeter * 12 + t * 8);
+      const gradient = ctx.createLinearGradient(cx - swing, y0, cx + swing, y1);
+      gradient.addColorStop(0, `rgba(255, 234, 178, ${0.08 + funnel.alpha * 0.16})`);
+      gradient.addColorStop(0.5, `rgba(255, 247, 216, ${0.16 + funnel.alpha * 0.22})`);
+      gradient.addColorStop(1, "rgba(255, 247, 216, 0)");
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = 6.5 - t * 2.4;
+      ctx.beginPath();
+      ctx.moveTo(cx - swing * 0.12, y0);
+      ctx.quadraticCurveTo(cx + swing, groundY - funnel.height * 0.36, cx - swing * 0.3, y1);
+      ctx.stroke();
+    }
+
+    for (let i = 0; i < 6; i += 1) {
+      const t = i / 5;
+      const radius = lerp(funnel.bottomWidth, funnel.topWidth, t);
+      const y = groundY - t * funnel.height;
+      const wobble = Math.sin(this.elapsed * (swirlSpeed * 0.7) + i * 0.92) * (10 + (1 - t) * 10);
+      ctx.strokeStyle = `rgba(255, 246, 214, ${0.08 + funnel.alpha * (0.36 - t * 0.08)})`;
+      ctx.lineWidth = 3.8 - t * 1.6;
+      ctx.beginPath();
+      ctx.ellipse(cx + wobble * 0.24, y, radius, Math.max(6, radius * 0.24), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    const count = Math.round(12 + this.boostMeter * 10 + pulse * 4);
+    for (let i = 0; i < count; i += 1) {
+      const t = i / Math.max(1, count - 1);
+      const y = groundY - t * funnel.height + Math.sin(this.elapsed * 7 + i) * 4;
+      const ringRadius = lerp(funnel.bottomWidth * 0.62, funnel.topWidth * 0.95, t);
+      const angle = this.elapsed * swirlSpeed * (1.16 - t * 0.28) + i * 1.97;
+      const x = cx + Math.sin(angle) * ringRadius;
+      const size = lerp(34, 18, t) * this.actor.visualScale;
+      drawSprite(ctx, feather, x, y, size, size, {
+        rotation: angle + Math.PI * 0.5,
+        alpha: 0.18 + funnel.alpha * (0.34 - t * 0.12),
+        flipX: Math.cos(angle) < 0,
+      });
+    }
+  }
+
+  drawLooseFeathers(ctx, game, foreground) {
+    const feather = game.assets.get("feather");
+    for (const loose of this.looseFeathers) {
+      if (loose.foreground !== foreground) continue;
+      const size = loose.size * (foreground ? 1.08 : 1);
+      drawSprite(ctx, feather, loose.x, loose.y, size, size, {
+        rotation: loose.angle,
+        alpha: clamp(loose.life * 0.62, 0, foreground ? 0.84 : 0.72),
+        flipX: loose.vx < 0,
+      });
+    }
+  }
+
+  drawPenFx(ctx) {
+    const funnel = this.funnelMetrics();
+    if (funnel) {
+      const floorW = funnel.bottomWidth * 1.46;
+      const floorH = 18 + funnel.bottomWidth * 0.18;
+      const glow = ctx.createRadialGradient(this.actor.x, this.actor.groundY + 10, 10, this.actor.x, this.actor.groundY + 10, floorW);
+      glow.addColorStop(0, `rgba(255, 231, 182, ${0.15 + funnel.alpha * 0.12})`);
+      glow.addColorStop(1, "rgba(255, 231, 182, 0)");
+      ctx.save();
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.ellipse(this.actor.x, this.actor.groundY + 10, floorW, floorH, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    for (const ring of this.floorRings) {
+      const alpha = clamp(ring.life * ring.alpha, 0, 1);
+      ctx.strokeStyle = `rgba(240, 214, 162, ${alpha})`;
+      ctx.lineWidth = ring.thickness;
+      ctx.beginPath();
+      ctx.ellipse(ring.x, ring.y, ring.radius, Math.max(8, ring.radius * 0.28), 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(255, 248, 226, ${alpha * 0.8})`;
+      ctx.lineWidth = Math.max(1.5, ring.thickness * 0.26);
+      ctx.beginPath();
+      ctx.ellipse(ring.x, ring.y, ring.radius + 8, Math.max(6, ring.radius * 0.24), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  drawFront(ctx, game) {
+    const blurCopies = this.state === "coreSpin" ? 3 : this.state === "spinUp" ? 2 : 0;
+    const shadowScale = this.state === "coreSpin" ? 0.68 : this.state === "spinUp" ? 0.82 : 1;
+    const actorAlpha = this.state === "coreSpin" ? 0.24 : this.state === "spinUp" ? 0.86 : this.actor.alpha;
+
+    this.drawActor(ctx, game, {
+      alpha: actorAlpha,
+      rotation: this.actor.rotation,
+      shadowScale,
+      blurCopies,
+      featherHat: this.state === "dizzy" && this.hatFeatherOn,
+    });
+    this.drawFunnel(ctx, game);
+    this.drawLooseFeathers(ctx, game, false);
+  }
+
+  drawOverlay(ctx, game) {
+    this.drawLooseFeathers(ctx, game, true);
+  }
+
+  onFinish(game) {
+    game.chicken.clearController("feather-tornado");
+    game.chicken.cluckTimer = this.prevCluckTimer || 0;
+    game.chicken.u = this.baseU;
+    game.chicken.v = this.baseV;
+    game.chicken.projectFromUV();
+    game.chicken.y = game.chicken.groundY;
+  }
+
+  getCinematicCue() {
+    return {
+      priority: 9,
+      focusX: this.actor.x,
+      focusY: this.actor.y - 54,
+      zoom: 1.08 + this.boostPulse() * 0.02,
+      vignette: 0.24,
+      nightBlend: 0,
+      ambienceDuck: 0.34,
+    };
+  }
+}
+
 class RainRainbowAction extends GameAction {
   constructor() {
     super({ id: "rainbow-rain", duration: 9.6, major: false });
@@ -3225,6 +3810,7 @@ export function registerDefaultActions(registry) {
   registry.register({ id: "peekaboo-coop", weight: 0.95, create: () => new PeekabooCoopAction() });
   registry.register({ id: "disco", weight: 1, create: () => new DiscoAction() });
   registry.register({ id: "egg-hatch", weight: 1.1, create: () => new EggHatchAction() });
+  registry.register({ id: "feather-tornado", weight: 0.95, create: () => new FeatherTornadoAction() });
   registry.register({ id: "chick-parade", weight: 0.95, create: () => new ChickParadeAction() });
   registry.register({ id: "rainbow-rain", weight: 1, create: () => new RainRainbowAction() });
   registry.register({ id: "butterflies", weight: 0.95, create: () => new ButterflyParadeAction() });

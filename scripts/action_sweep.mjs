@@ -16,6 +16,7 @@ const HERO_ACTIONS = [
   { id: "jetpack", durationMs: 13200 },
   { id: "fireworks", durationMs: 5200 },
   { id: "disco", durationMs: 8000 },
+  { id: "feather-tornado", durationMs: 7200 },
   { id: "peekaboo-coop", durationMs: 10800 },
 ];
 
@@ -63,9 +64,12 @@ async function readFrameTelemetry(page, actionId) {
         ? action.drops.slice(0, 18).map((drop) => (typeof drop.originY === "number" ? drop.originY : drop.y))
         : [],
       skyBandMaxY: typeof action?.skyBandMaxY === "number" ? action.skyBandMaxY : null,
+      boostMeter: typeof action?.boostMeter === "number" ? action.boostMeter : null,
+      boostCount: typeof action?.boostCount === "number" ? action.boostCount : null,
       nightBlend: g?.cinematic?.state?.nightBlend ?? 0,
       chickenX: g?.chicken?.x ?? 0,
       chickenGroundY: g?.chicken?.groundY ?? 0,
+      controllerName: g?.chicken?.controllerName ?? "",
       activeActions: (g?.activeActions || []).map((candidate) => candidate.id),
     };
   }, actionId);
@@ -97,6 +101,10 @@ async function runActionStoryboard(page, actionId, durationMs, frames = 10) {
       // Peekaboo coop is tap-gated during interior hiding; click to advance the 3 reveals.
       await page.mouse.click(640, 650);
       await page.waitForTimeout(120);
+    } else if (actionId === "feather-tornado" && (i === 2 || i === 3 || i === 4)) {
+      // Feather tornado accepts boost taps only during core spin.
+      await page.mouse.click(640, 650);
+      await page.waitForTimeout(120);
     }
     telemetry.push(await readFrameTelemetry(page, actionId));
     const shotPath = path.join(OUT_DIR, `${actionId}-${String(i + 1).padStart(2, "0")}.png`);
@@ -108,6 +116,10 @@ async function runActionStoryboard(page, actionId, durationMs, frames = 10) {
 
   await clearActions(page);
   await page.waitForTimeout(100);
+  telemetry.afterClear = await page.evaluate(() => ({
+    controllerName: window.chickenGame?.chicken?.controllerName ?? "",
+    activeActions: (window.chickenGame?.activeActions || []).map((candidate) => candidate.id),
+  }));
   return telemetry;
 }
 
@@ -137,6 +149,12 @@ function evaluateInvariants(results, idleTelemetry, pageErrors, consoleErrors) {
 
   const discoTelemetry = results.disco || [];
   const discoMaxNightBlend = discoTelemetry.reduce((max, entry) => Math.max(max, entry.nightBlend || 0), 0);
+
+  const featherTelemetry = results["feather-tornado"] || [];
+  const featherStates = featherTelemetry.map((entry) => entry.actionState || "");
+  const featherMaxBoost = featherTelemetry.reduce((max, entry) => Math.max(max, entry.boostMeter || 0), 0);
+  const featherBoostCount = featherTelemetry.reduce((max, entry) => Math.max(max, entry.boostCount || 0), 0);
+  const featherAfterClear = featherTelemetry.afterClear || { controllerName: "", activeActions: [] };
 
   const idleXRange = range(idleTelemetry.map((entry) => entry.chickenX));
   const idleYRange = range(idleTelemetry.map((entry) => entry.chickenGroundY));
@@ -169,6 +187,15 @@ function evaluateInvariants(results, idleTelemetry, pageErrors, consoleErrors) {
     discoNightBlend: {
       pass: discoMaxNightBlend >= 0.7,
       details: { discoMaxNightBlend },
+    },
+    featherBoostPath: {
+      pass:
+        featherStates.includes("coreSpin") &&
+        featherMaxBoost > 0.17 &&
+        featherBoostCount >= 3 &&
+        featherAfterClear.controllerName === "" &&
+        featherAfterClear.activeActions.length === 0,
+      details: { featherStates, featherMaxBoost, featherBoostCount, featherAfterClear },
     },
     idleMovementXY: {
       pass: idleXRange >= 45 && idleYRange >= 10,
